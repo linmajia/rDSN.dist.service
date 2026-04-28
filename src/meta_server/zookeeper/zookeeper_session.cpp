@@ -324,10 +324,13 @@ void zookeeper_session::global_strings_completion(int rc, const String_vector *s
 void zookeeper_session::global_void_completion(int rc, const void *data)
 {
     COMPLETION_INIT(rc, data);
-    if (op_ctx->_optype == ZOO_DELETE)
+    if (op_ctx->_optype == ZOO_DELETE) {
         dinfo("rc(%s), input path( %s )", zerror(rc), op_ctx->_input._path.c_str());
-    else
-        dinfo("rc(%s)", zerror(rc));    op_ctx->_callback_function(op_ctx);
+    }
+    else {
+        dinfo("rc(%s)", zerror(rc));
+    }
+    op_ctx->_callback_function(op_ctx);
     free_context(op_ctx);
 }
 
