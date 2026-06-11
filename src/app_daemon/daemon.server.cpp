@@ -941,7 +941,7 @@ namespace dsn
                     std::string libs_new =
                         pkg->package_dir + ":" +
                         deployment_dir;
-                    if (current_ld_path != nullptr && current_ld_path[0] != '\0')
+                    if (!current_ld_path.empty())
                     {
                         libs_new += ":";
                         libs_new += current_ld_path;
