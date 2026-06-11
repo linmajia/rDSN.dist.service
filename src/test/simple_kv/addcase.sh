@@ -8,12 +8,11 @@ fi
 
 id=$1
 
-if [ -f case-${id}.act ]; then
+if [ -f "case-${id}.act" ]; then
     echo "case ${id} already exists"
     exit -1
 fi
 
 old=$2
-cp case-${old}.act case-${id}.act
-cp case-${old}.ini case-${id}.ini
-
+cp "case-${old}.act" "case-${id}.act"
+cp "case-${old}.ini" "case-${id}.ini"

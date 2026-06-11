@@ -49,7 +49,7 @@ mutation::mutation()
     _not_logged = 1;
     _prepare_ts_ms = 0;
     _prepare_request = nullptr;
-    strcpy(_name, "0.0.0.0");
+    snprintf_p(_name, sizeof(_name), "0.0.0.0");
     _appro_data_bytes = sizeof(mutation_header);
     _create_ts_ns = dsn_now_ns();
     _tid = ++s_tid;

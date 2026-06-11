@@ -39,6 +39,7 @@
 #include "replica_stub.h"
 #include <dsn/utility/factory_store.h>
 #include "replication_app_base.h"
+#include <sstream>
 
 # ifdef __TITLE__
 # undef __TITLE__
@@ -166,15 +167,16 @@ error_code replica::initialize_on_load()
         // clear work on failure
         if (dsn::utils::filesystem::directory_exists(dir))
         {
-            char rename_dir[256];
-            sprintf(rename_dir, "%s.%" PRIu64 ".err", dir, dsn_now_us());
+            std::stringstream ss;
+            ss << dir << "." << dsn_now_us() << ".err";
+            std::string rename_dir = ss.str();
             if (dsn::utils::filesystem::rename_path(dir, rename_dir))
             {
-                dwarn("move bad replica from '%s' to '%s'", dir, rename_dir);
+                dwarn("move bad replica from '%s' to '%s'", dir, rename_dir.c_str());
             }
             else
             {
-                derror("move bad replica from '%s' to '%s' failed", dir, rename_dir);
+                derror("move bad replica from '%s' to '%s' failed", dir, rename_dir.c_str());
             }
         }
 
