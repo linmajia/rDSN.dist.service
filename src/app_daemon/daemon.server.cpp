@@ -132,7 +132,7 @@ namespace dsn
 
 # ifdef _WIN32
             _job = CreateJobObjectA(NULL, NULL);
-            dassert(_job != NULL, "create windows job failed, err = %d", ::GetLastError());
+            dassert(_job != NULL, "create windows job failed, err = %d", (int)::GetLastError());
 
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = { 0 };
 
@@ -141,7 +141,7 @@ namespace dsn
 
             if (0 == SetInformationJobObject(_job, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli)))
             {
-                dassert(false, "Could not SetInformationJobObject, err = %d", ::GetLastError());
+                dassert(false, "Could not SetInformationJobObject, err = %d", (int)::GetLastError());
             }
 # else
 # endif
@@ -881,7 +881,7 @@ namespace dsn
                     CloseHandle(si.hStdError);
                     CloseHandle(si.hStdOutput);
 
-                    derror("create process (CreateProcess) failed, err = %d", ::GetLastError());
+                    derror("create process (CreateProcess) failed, err = %d", (int)::GetLastError());
                     break;
                 }
 # else
