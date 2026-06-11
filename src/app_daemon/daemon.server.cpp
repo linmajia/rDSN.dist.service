@@ -933,7 +933,7 @@ namespace dsn
                     // set up envs
                     if (chdir(app->working_dir.c_str()) == -1)
                     {
-                        _exit(1);
+                        dassert(false, "change working dir to '%s' failed, err = %d", app->working_dir.c_str(), errno);
                     }
 
                     const char* current_ld_path = getenv("LD_LIBRARY_PATH");
