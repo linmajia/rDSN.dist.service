@@ -57,6 +57,8 @@ zookeeper_session::zoo_atomic_packet::zoo_atomic_packet(unsigned int size)
 
     _ops = (zoo_op_t*)calloc(size, sizeof(zoo_op_t));
     _results = (zoo_op_result_t*)calloc(size, sizeof(zoo_op_result_t));
+    dassert(_ops != nullptr, "allocate zookeeper atomic ops failed");
+    dassert(_results != nullptr, "allocate zookeeper atomic results failed");
     if (_ops == nullptr || _results == nullptr)
     {
         free(_ops);
