@@ -895,12 +895,12 @@ namespace dsn
                     // redirect std output and err
                     int serr = open(
                         utils::filesystem::path_combine(app->working_dir, "foo.err").c_str(),
-                        O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR
+                        O_RDWR | O_CREAT, S_IRUSR | S_IWUSR
                     );
 
                     int sout = open(
                         utils::filesystem::path_combine(app->working_dir, "foo.out").c_str(),
-                        O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR
+                        O_RDWR | O_CREAT, S_IRUSR | S_IWUSR
                     );
 
                     if (serr < 0 || sout < 0 || dup2(sout, STDOUT_FILENO) == -1 || dup2(serr, STDERR_FILENO) == -1)
