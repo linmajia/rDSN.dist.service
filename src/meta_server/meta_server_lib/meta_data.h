@@ -184,7 +184,10 @@ inline const partition_configuration* get_config(const app_mapper& apps, const d
     auto iter = apps.find(gpid.get_app_id());
     if (iter==apps.end() || iter->second->status==app_status::AS_DROPPED)
         return nullptr;
-    return &(iter->second->partitions[gpid.get_partition_index()]);
+    int32_t index = gpid.get_partition_index();
+    if (index < 0 || (size_t)index >= iter->second->partitions.size())
+        return nullptr;
+    return &(iter->second->partitions[index]);
 }
 
 inline const config_context* get_config_context(const app_mapper& apps, const dsn::gpid& gpid)
@@ -192,7 +195,10 @@ inline const config_context* get_config_context(const app_mapper& apps, const ds
     auto iter = apps.find(gpid.get_app_id());
     if (iter == apps.end() || iter->second->status==app_status::AS_DROPPED)
         return nullptr;
-    return &(iter->second->helpers->contexts[gpid.get_partition_index()]);
+    int32_t index = gpid.get_partition_index();
+    if (index < 0 || (size_t)index >= iter->second->helpers->contexts.size())
+        return nullptr;
+    return &(iter->second->helpers->contexts[index]);
 }
 
 inline bool walk_through_primary(const meta_view& view, const dsn::rpc_address& addr, const std::function<bool (const partition_configuration& pc)>& func)

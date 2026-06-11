@@ -77,27 +77,27 @@ int main(int argc, char** argv)
 
     for(int index = 3; index < argc; index++)
     {
-        if(strcmp(argv[index], "-name") == 0 && argc > index)
+        if(strcmp(argv[index], "-name") == 0 && index + 1 < argc)
         {
             app_name.assign(argv[++index]);
             std::cout << "app_name:" << app_name <<std::endl;
         }
-        else if(strcmp(argv[index], "-type") == 0 && argc > index)
+        else if(strcmp(argv[index], "-type") == 0 && index + 1 < argc)
         {
             app_type.assign(argv[++index]);
             std::cout << "app_type:" << app_type <<std::endl;
         }
-        else if(strcmp(argv[index], "-pc") == 0 && argc > index)
+        else if(strcmp(argv[index], "-pc") == 0 && index + 1 < argc)
         {
             partition_count = atol(argv[++index]);
             std::cout << "partition_count:" << partition_count <<std::endl;
         }
-        else if(strcmp(argv[index], "-rc") == 0 && argc > index)
+        else if(strcmp(argv[index], "-rc") == 0 && index + 1 < argc)
         {
             replica_count = atol(argv[++index]);
             std::cout << "replica_count:" << replica_count <<std::endl;
         }
-        else if(strcmp(argv[index], "-status") == 0 && argc > index)
+        else if(strcmp(argv[index], "-status") == 0 && index + 1 < argc)
         {
             status.assign(argv[++index]);
             std::cout << "status:" << status <<std::endl;
@@ -107,12 +107,12 @@ int main(int argc, char** argv)
             detailed = true;
             std::cout << "show details." <<std::endl;
         }
-        else if(strcmp(argv[index], "-o") == 0 && argc > index)
+        else if(strcmp(argv[index], "-o") == 0 && index + 1 < argc)
         {
             out_file = argv[++index];
             std::cout << "out to file:" << out_file <<std::endl;
         }
-        else if (strcmp(argv[index], "-env") == 0 && argc > index)
+        else if (strcmp(argv[index], "-env") == 0 && index + 1 < argc)
         {
             std::vector<std::string> kvs;
             ::dsn::utils::split_args(argv[++index], kvs, ';');
@@ -234,6 +234,11 @@ int main(int argc, char** argv)
             else if (strcmp(argv[i], "-to") == 0) {
                 to.from_string_ipv4(argv[i+1]);
             }
+        }
+
+        if (action_func == nullptr) {
+            std::cerr << "balancer command requires a valid -type <move_pri|copy_pri|copy_sec>" << std::endl;
+            usage(argv[0]);
         }
 
         action_func(from, to, request.action_list);
