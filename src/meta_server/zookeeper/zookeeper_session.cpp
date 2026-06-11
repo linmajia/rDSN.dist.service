@@ -36,7 +36,6 @@
 
 #include "zookeeper_session.h"
 #include "zookeeper_session_mgr.h"
-
 #include <new>
 
 #ifdef __TITLE__
@@ -56,13 +55,16 @@ zookeeper_session::zoo_atomic_packet::zoo_atomic_packet(unsigned int size)
     _datas.resize(size);
 
     _ops = (zoo_op_t*)calloc(size, sizeof(zoo_op_t));
+    if (_ops == nullptr)
+    {
+        throw std::bad_alloc();
+    }
+
     _results = (zoo_op_result_t*)calloc(size, sizeof(zoo_op_result_t));
-    dassert(_ops != nullptr, "allocate zookeeper atomic ops failed");
-    dassert(_results != nullptr, "allocate zookeeper atomic results failed");
-    if (_ops == nullptr || _results == nullptr)
+    if (_results == nullptr)
     {
         free(_ops);
-        free(_results);
+        _ops = nullptr;
         throw std::bad_alloc();
     }
 }
@@ -76,7 +78,9 @@ zookeeper_session::zoo_atomic_packet::~zoo_atomic_packet()
             free(_ops[i].set_op.stat);
     }
     free(_ops);
+    _ops = nullptr;
     free(_results);
+    _results = nullptr;
 }
 
 char* zookeeper_session::zoo_atomic_packet::alloc_buffer(int buffer_length)

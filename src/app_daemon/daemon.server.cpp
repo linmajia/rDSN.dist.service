@@ -781,14 +781,17 @@ namespace dsn
                 // add deployment path as DSN_DEPLOYMENT_PATH
 # ifdef _WIN32
                 char exe_path[1024];
-                ::GetModuleFileNameA(nullptr, exe_path, 1024);
+                DWORD exe_path_len = ::GetModuleFileNameA(nullptr, exe_path, 1024);
+                if (exe_path_len == 0)
+                {
+                    dassert(false, "GetModuleFileNameA failed, err = %d", (int)::GetLastError());
+                }
 # else
                 char exe_path[1024];
                 ssize_t exe_path_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
                 if (exe_path_len == -1)
                 {
-                    derror("read /proc/self/exe failed, err = %d", errno);
-                    break;
+                    dassert(false, "read /proc/self/exe failed, err = %d", errno);
                 }
                 exe_path[exe_path_len] = '\0';
 # endif
@@ -893,42 +896,30 @@ namespace dsn
                 else if (child == 0)
                 {
                     // redirect std output and err
+                    int ret;
                     int serr = open(
                         utils::filesystem::path_combine(app->working_dir, "foo.err").c_str(),
                         O_RDWR | O_CREAT, S_IRUSR | S_IWUSR
                     );
+                    dassert(serr >= 0, "open stderr file failed, err = %d", errno);
+                    ret = dup2(serr, STDERR_FILENO);
+                    close(serr);
+                    if (ret == -1)
+                    {
+                        dassert(false, "redirect stderr failed, err = %d", errno);
+                    }
 
                     int sout = open(
                         utils::filesystem::path_combine(app->working_dir, "foo.out").c_str(),
                         O_RDWR | O_CREAT, S_IRUSR | S_IWUSR
                     );
-
-                    if (serr < 0)
-                    {
-                        dassert(false, "open stderr file failed, err = %d", errno);
-                    }
-                    else if (dup2(serr, STDERR_FILENO) == -1)
-                    {
-                        dassert(false, "redirect stderr failed, err = %d", errno);
-                        close(serr);
-                        serr = -1;
-                    }
-
-                    if (sout < 0)
-                    {
-                        dassert(false, "open stdout file failed, err = %d", errno);
-                    }
-                    else if (dup2(sout, STDOUT_FILENO) == -1)
+                    dassert(sout >= 0, "open stdout file failed, err = %d", errno);
+                    ret = dup2(sout, STDOUT_FILENO);
+                    close(sout);
+                    if (ret == -1)
                     {
                         dassert(false, "redirect stdout failed, err = %d", errno);
-                        close(sout);
-                        sout = -1;
                     }
-
-                    if (serr >= 0)
-                        close(serr);
-                    if (sout >= 0)
-                        close(sout);
 
                     // set up envs
                     if (chdir(app->working_dir.c_str()) == -1)
