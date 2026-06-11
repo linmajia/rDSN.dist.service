@@ -903,17 +903,32 @@ namespace dsn
                         O_RDWR | O_CREAT, S_IRUSR | S_IWUSR
                     );
 
-                    if (serr < 0 || sout < 0 || dup2(sout, STDOUT_FILENO) == -1 || dup2(serr, STDERR_FILENO) == -1)
+                    if (serr < 0)
                     {
-                        if (serr >= 0)
-                            close(serr);
-                        if (sout >= 0)
-                            close(sout);
-                        _exit(1);
+                        dassert(false, "open stderr file failed, err = %d", errno);
+                    }
+                    else if (dup2(serr, STDERR_FILENO) == -1)
+                    {
+                        dassert(false, "redirect stderr failed, err = %d", errno);
+                        close(serr);
+                        serr = -1;
                     }
 
-                    close(serr);
-                    close(sout);
+                    if (sout < 0)
+                    {
+                        dassert(false, "open stdout file failed, err = %d", errno);
+                    }
+                    else if (dup2(sout, STDOUT_FILENO) == -1)
+                    {
+                        dassert(false, "redirect stdout failed, err = %d", errno);
+                        close(sout);
+                        sout = -1;
+                    }
+
+                    if (serr >= 0)
+                        close(serr);
+                    if (sout >= 0)
+                        close(sout);
 
                     // set up envs
                     if (chdir(app->working_dir.c_str()) == -1)
