@@ -560,7 +560,6 @@ namespace dsn
                             );
 
                             // TODO: using zip lib instead
-# ifdef _WIN32
                             char command[1024];
                             snprintf_p(command, sizeof(command), 
                                 _unzip_format_string.c_str(),
@@ -569,82 +568,15 @@ namespace dsn
                                 );
 
                             // decompress when completed
-                            STARTUPINFOA si;
-                            PROCESS_INFORMATION pi;
-                            ZeroMemory(&si, sizeof(si));
-                            si.cb = sizeof(si);
-                            ZeroMemory(&pi, sizeof(pi));
-                            int serr = 0;
-                            if (::CreateProcessA(NULL,
-                                                 command,
-                                                 NULL,
-                                                 NULL,
-                                                 FALSE,
-                                                 0,
-                                                 NULL,
-                                                 _working_dir.c_str(),
-                                                 &si,
-                                                 &pi))
-                            {
-                                WaitForSingleObject(pi.hProcess, INFINITE);
-                                DWORD exit_code = 0;
-                                GetExitCodeProcess(pi.hProcess, &exit_code);
-                                serr = static_cast<int>(exit_code);
-                                CloseHandle(pi.hThread);
-                                CloseHandle(pi.hProcess);
-                            }
-                            else
-                            {
-                                serr = -1;
-                            }
-# else
-                            const std::string package_path =
-                                _working_dir + '/' + capp->info.app_type + ".tar.gz";
-                            int serr = 0;
-                            pid_t child = fork();
-                            if (child == 0)
-                            {
-                                execlp("tar",
-                                       "tar",
-                                       "zxvf",
-                                       package_path.c_str(),
-                                       "-C",
-                                       _working_dir.c_str(),
-                                       (char*)nullptr);
-                                _exit(127);
-                            }
-                            else if (child < 0)
-                            {
-                                serr = -1;
-                            }
-                            else
-                            {
-                                int status = 0;
-                                pid_t wait_result;
-                                while ((wait_result = waitpid(child, &status, 0)) == -1 && errno == EINTR)
-                                {
-                                }
-                                serr = (wait_result != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
-                            }
-# endif
+                            int serr = system(command);
                             if (serr != 0)
                             {
-# ifdef _WIN32
                                 derror("extract package %s with cmd '%s' failed, err = %d, errno = %d",
                                     pkg->package_dir.c_str(),
                                     command,
                                     serr,
                                     errno
                                 );
-# else
-                                derror("extract package %s from '%s' to '%s' failed, err = %d, errno = %d",
-                                    pkg->package_dir.c_str(),
-                                    package_path.c_str(),
-                                    _working_dir.c_str(),
-                                    serr,
-                                    errno
-                                );
-# endif
 
                                 err = ERR_UNKNOWN;
 
