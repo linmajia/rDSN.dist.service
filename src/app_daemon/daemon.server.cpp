@@ -936,12 +936,11 @@ namespace dsn
                         dassert(false, "change working dir to '%s' failed, err = %d", app->working_dir.c_str(), errno);
                     }
 
-                    const char* env_ld_path = getenv("LD_LIBRARY_PATH");
-                    std::string current_ld_path = env_ld_path == nullptr ? "" : env_ld_path;
+                    const char* current_ld_path = getenv("LD_LIBRARY_PATH");
                     std::string libs_new =
                         pkg->package_dir + ":" +
                         deployment_dir;
-                    if (!current_ld_path.empty())
+                    if (current_ld_path != nullptr && current_ld_path[0] != '\0')
                     {
                         libs_new += ":";
                         libs_new += current_ld_path;
