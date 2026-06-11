@@ -529,7 +529,7 @@ void event_on_task::init(task* tsk)
     if (tsk != nullptr)
     {
         char buf[100];
-        sprintf(buf, "%016" PRIx64, tsk->id());
+        snprintf_p(buf, sizeof(buf), "%016" PRIx64, tsk->id());
         _task_id = buf;
         _node = tsk->node_name();
         _task_code = dsn_task_code_to_string(tsk->code());
@@ -580,7 +580,7 @@ void event_on_rpc::init(message_ex* msg, task* tsk)
     if (msg != nullptr)
     {
         char buf[100];
-        sprintf(buf, "%016lx", msg->header->trace_id);
+        snprintf_p(buf, sizeof(buf), "%016lx", msg->header->trace_id);
         _trace_id = buf;
         _rpc_name = msg->header->rpc_name;
         _from = address_to_node(msg->header->from_address);
@@ -1181,7 +1181,7 @@ void test_case::print(case_line* cl, const std::string& other, bool is_skip)
     else // cl != nullptr
     {
         char buf[100];
-        sprintf(buf, "%5d  ", cl->line_no());
+        snprintf_p(buf, sizeof(buf), "%5d  ", cl->line_no());
         std::cout << buf << cl->to_string() << std::endl;
         if (!other.empty())
         {
@@ -1491,4 +1491,3 @@ void test_case::internal_register_creator(const std::string& name, case_line_cre
 }
 
 }}}
-

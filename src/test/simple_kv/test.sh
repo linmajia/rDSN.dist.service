@@ -1,20 +1,21 @@
 #!/bin/bash
 
 bin=./dsn.dist.service.test.simple_kv
+cases=()
 
 function run_single()
 {
     prefix=$1
     echo "${bin} ${prefix}.ini ${prefix}.act"
-    ${bin} ${prefix}.ini ${prefix}.act
+    "${bin}" "${prefix}.ini" "${prefix}.act"
     ret=$?
-    if find . -name log.1.txt &>/dev/null; then
-        log=`find . -name log.1.txt`
-        cat ${log} | grep -v FAILURE_DETECT | grep -v BEACON | grep -v beacon | grep -v THREAD_POOL_FD >${prefix}.log
-        rm ${log}
+    log=$(find . -name log.1.txt -print -quit)
+    if [ -n "${log}" ]; then
+        grep -v FAILURE_DETECT "${log}" | grep -v BEACON | grep -v beacon | grep -v THREAD_POOL_FD >"${prefix}.log"
+        rm -- "${log}"
     fi
 
-    if [ ${ret} -ne 0 ]; then
+    if [ "${ret}" -ne 0 ]; then
         echo "run ${prefix} failed, return value = ${ret}"
         if [ -f core ]; then
             echo "---- gdb ./dsn.rep_tests.simple_kv core ----"
@@ -28,8 +29,8 @@ function run_case()
 {
     id=$1
 
-    if [ -d case-${id} ]; then
-        cd case-${id}
+    if [ -d "case-${id}" ]; then
+        cd "case-${id}"
         ./test.sh
         if [ $? -ne 0 ]; then
             exit -1
@@ -38,17 +39,18 @@ function run_case()
         return
     fi
 
-    if [ -f case-${id}.act ]; then
+    if [ -f "case-${id}.act" ]; then
         rm -rf data core*
-        run_single case-${id}
+        run_single "case-${id}"
         return
     fi
 
-    subcases=`ls case-${id}-[0-9].act 2>/dev/null | sed -n 's/^case-[0-9][0-9][0-9]-\([0-9]\).act$/\1/p' | sort -u`
-    if [ ! -z "${subcases}" ]; then
+    subcases=$(find . -maxdepth 1 -name "case-${id}-[0-9].act" -print |
+        sed -n 's|^\./case-[0-9][0-9][0-9]-\([0-9]\).act$|\1|p' | sort -u)
+    if [ -n "${subcases}" ]; then
         rm -rf data core*
         for subid in ${subcases}; do
-            run_single case-${id}-${subid}
+            run_single "case-${id}-${subid}"
         done
         return
     fi
@@ -58,19 +60,21 @@ function run_case()
 }
 
 if [ $# -eq 0 ]; then
-    if [ ! -z "${DSN_TEST_FILTER}" ]; then
-        cases=`echo ${DSN_TEST_FILTER} | sed 's/[,:]/ /g'`
+    if [ -n "${DSN_TEST_FILTER}" ]; then
+        IFS=',:' read -ra cases <<< "${DSN_TEST_FILTER}"
     else
-        cases=`ls case-* 2>/dev/null | sed -n 's/^case-\([0-9][0-9][0-9]\).*$/\1/p' | sort -u`
+        while IFS= read -r case_id; do
+            cases+=("${case_id}")
+        done < <(find . -maxdepth 1 -name 'case-*' -print |
+            sed -n 's|^\./case-\([0-9][0-9][0-9]\).*$|\1|p' | sort -u)
     fi
 else
-    cases=$*
+    cases=("$@")
 fi
 
-if [ ! -z "${cases}" ]; then
-    for id in ${cases}; do
-        run_case ${id}
+if [ ${#cases[@]} -gt 0 ]; then
+    for id in "${cases[@]}"; do
+        run_case "${id}"
         echo
     done
 fi
-

@@ -224,8 +224,9 @@ namespace dsn {
                 }
 
                 // TODO: should use async write instead
-                char name[256];
-                sprintf(name, "%s/checkpoint.%" PRId64, data_dir(), last_commit);
+                std::stringstream ss;
+                ss << data_dir() << "/checkpoint." << last_commit;
+                std::string name = ss.str();
                 std::ofstream os(name, std::ios::binary);
 
                 uint64_t count = (uint64_t)_store.size();
@@ -281,15 +282,13 @@ namespace dsn {
 
                 if (last_durable_decree() > 0)
                 {
-                    char name[256];
-                    sprintf(name, "%s/checkpoint.%" PRId64,
-                        data_dir(),
-                        last_durable_decree()
-                        );
+                    std::stringstream ss;
+                    ss << data_dir() << "/checkpoint." << last_durable_decree();
+                    std::string name = ss.str();
 
                     state.from_decree_excluded = 0;
                     state.to_decree_included = last_durable_decree();
-                    state.files.push_back(std::string(name));
+                    state.files.push_back(name);
 
                     ddebug("simple_kv_service_impl get checkpoint succeed, last_durable_decree = %" PRId64 "", last_durable_decree());
                     return ERR_OK;
@@ -324,12 +323,9 @@ namespace dsn {
                     dassert(DSN_CHKPT_COPY == mode, "invalid mode %d", (int)mode);
                     dassert(state.to_decree_included > last_durable_decree(), "checkpoint's decree is smaller than current");
 
-                    char name[256];
-                    sprintf(name, "%s/checkpoint.%" PRId64,
-                        data_dir(),
-                        state.to_decree_included
-                        );
-                    std::string lname(name);
+                    std::stringstream ss;
+                    ss << data_dir() << "/checkpoint." << state.to_decree_included;
+                    std::string lname = ss.str();
 
                     if (!utils::filesystem::rename_path(state.files[0], lname))
                     {
@@ -347,4 +343,3 @@ namespace dsn {
         }
     }
 }
-

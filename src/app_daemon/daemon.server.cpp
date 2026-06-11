@@ -39,11 +39,17 @@
 # include <dsn/cpp/utils.h>
 # include <dsn/tool_api.h>
 # include <dsn/utility/module_init.cpp.h>
+# include <cctype>
+# include <cerrno>
 # include <fstream>
 
 # if defined(__linux__)
 # include <sys/prctl.h>
+# endif
+# if !defined(_WIN32)
+# include <fcntl.h>
 # include <sys/wait.h>
+# include <unistd.h>
 # endif
 
 using namespace ::dsn::replication;
@@ -58,6 +64,21 @@ namespace dsn
 {
     namespace dist
     {
+        static bool is_valid_package_name(const std::string& name)
+        {
+            if (name.empty() || name == "." || name == "..")
+                return false;
+
+            for (char c : name)
+            {
+                unsigned char ch = static_cast<unsigned char>(c);
+                if (!std::isalnum(ch) && c != '_' && c != '-' && c != '.')
+                    return false;
+            }
+
+            return true;
+        }
+
 # if defined(__linux__)
         static daemon_s_service* s_single_daemon = nullptr;
         void daemon_s_service::on_exit(::dsn::sys_exit_type st)
@@ -433,6 +454,12 @@ namespace dsn
 
         void daemon_s_service::on_add_app(const ::dsn::replication::configuration_update_request & proposal)
         {
+            if (!is_valid_package_name(proposal.info.app_type))
+            {
+                derror("invalid app package name '%s'", proposal.info.app_type.c_str());
+                return;
+            }
+
             std::shared_ptr<package_internal> ppackage;
             std::shared_ptr<app_internal> app;
             bool resource_ready = false;
@@ -533,23 +560,91 @@ namespace dsn
                             );
 
                             // TODO: using zip lib instead
+# ifdef _WIN32
                             char command[1024];
                             snprintf_p(command, sizeof(command), 
                                 _unzip_format_string.c_str(),
                                 (_working_dir + '/' + capp->info.app_type).c_str(),
                                 _working_dir.c_str()
                                 );
-                            
+
                             // decompress when completed
-                            int serr = system(command);
+                            STARTUPINFOA si;
+                            PROCESS_INFORMATION pi;
+                            ZeroMemory(&si, sizeof(si));
+                            si.cb = sizeof(si);
+                            ZeroMemory(&pi, sizeof(pi));
+                            int serr = 0;
+                            if (::CreateProcessA(NULL,
+                                                 command,
+                                                 NULL,
+                                                 NULL,
+                                                 FALSE,
+                                                 0,
+                                                 NULL,
+                                                 _working_dir.c_str(),
+                                                 &si,
+                                                 &pi))
+                            {
+                                WaitForSingleObject(pi.hProcess, INFINITE);
+                                DWORD exit_code = 0;
+                                GetExitCodeProcess(pi.hProcess, &exit_code);
+                                serr = static_cast<int>(exit_code);
+                                CloseHandle(pi.hThread);
+                                CloseHandle(pi.hProcess);
+                            }
+                            else
+                            {
+                                serr = -1;
+                            }
+# else
+                            const std::string package_path =
+                                _working_dir + '/' + capp->info.app_type + ".tar.gz";
+                            int serr = 0;
+                            pid_t child = fork();
+                            if (child == 0)
+                            {
+                                execlp("tar",
+                                       "tar",
+                                       "zxvf",
+                                       package_path.c_str(),
+                                       "-C",
+                                       _working_dir.c_str(),
+                                       (char*)nullptr);
+                                _exit(127);
+                            }
+                            else if (child < 0)
+                            {
+                                serr = -1;
+                            }
+                            else
+                            {
+                                int status = 0;
+                                pid_t wait_result;
+                                while ((wait_result = waitpid(child, &status, 0)) == -1 && errno == EINTR)
+                                {
+                                }
+                                serr = (wait_result != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
+                            }
+# endif
                             if (serr != 0)
                             {
+# ifdef _WIN32
                                 derror("extract package %s with cmd '%s' failed, err = %d, errno = %d",
                                     pkg->package_dir.c_str(),
                                     command,
                                     serr,
                                     errno
                                 );
+# else
+                                derror("extract package %s from '%s' to '%s' failed, err = %d, errno = %d",
+                                    pkg->package_dir.c_str(),
+                                    package_path.c_str(),
+                                    _working_dir.c_str(),
+                                    serr,
+                                    errno
+                                );
+# endif
 
                                 err = ERR_UNKNOWN;
 
@@ -757,10 +852,13 @@ namespace dsn
                 ::GetModuleFileNameA(nullptr, exe_path, 1024);
 # else
                 char exe_path[1024];
-                if (readlink("/proc/self/exe", exe_path, 1024) == -1)
+                ssize_t exe_path_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+                if (exe_path_len == -1)
                 {
-                    dassert(false, "read /proc/self/exe failed");
+                    derror("read /proc/self/exe failed, err = %d", errno);
+                    break;
                 }
+                exe_path[exe_path_len] = '\0';
 # endif
                 std::string host_name = utils::filesystem::get_file_name(exe_path);
                 dassert(host_name.substr(0, strlen("dsn.svchost")) == "dsn.svchost",
@@ -865,28 +963,41 @@ namespace dsn
                     // redirect std output and err
                     int serr = open(
                         utils::filesystem::path_combine(app->working_dir, "foo.err").c_str(),
-                        O_RDWR | O_CREAT, S_IRUSR | S_IWUSR
+                        O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR
                     );
 
                     int sout = open(
                         utils::filesystem::path_combine(app->working_dir, "foo.out").c_str(),
-                        O_RDWR | O_CREAT, S_IRUSR | S_IWUSR
+                        O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR
                     );
 
-                    dup2(sout, 1);
-                    dup2(serr, 2);
+                    if (serr < 0 || sout < 0 || dup2(sout, STDOUT_FILENO) == -1 || dup2(serr, STDERR_FILENO) == -1)
+                    {
+                        if (serr >= 0)
+                            close(serr);
+                        if (sout >= 0)
+                            close(sout);
+                        _exit(1);
+                    }
 
                     close(serr);
                     close(sout);
 
                     // set up envs
-                    chdir(app->working_dir.c_str());
-                                        
-                    std::string libs_new = 
-                        pkg->package_dir + ":" + 
-                        deployment_dir + ":" + 
-                        getenv("LD_LIBRARY_PATH")
-                        ;
+                    if (chdir(app->working_dir.c_str()) == -1)
+                    {
+                        _exit(1);
+                    }
+
+                    const char* current_ld_path = getenv("LD_LIBRARY_PATH");
+                    std::string libs_new =
+                        pkg->package_dir + ":" +
+                        deployment_dir;
+                    if (current_ld_path != nullptr && current_ld_path[0] != '\0')
+                    {
+                        libs_new += ":";
+                        libs_new += current_ld_path;
+                    }
 
                     setenv("LD_LIBRARY_PATH", libs_new.c_str(), 1);
 
@@ -932,7 +1043,7 @@ namespace dsn
                         };
                         execve(exe_path, argv, environ);
                     }
-                    exit(0);
+                    _exit(127);
                 }
                 else
                 {

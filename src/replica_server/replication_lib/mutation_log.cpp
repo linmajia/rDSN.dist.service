@@ -39,6 +39,7 @@
 #include <io.h>
 #endif
 #include "replica.h"
+#include <sstream>
 
 # ifdef __TITLE__
 # undef __TITLE__
@@ -1854,19 +1855,20 @@ log_file::~log_file()
     int64_t start_offset
     )
 {
-    char path[512]; 
-    sprintf (path, "%s/log.%d.%" PRId64, dir, index, start_offset);
+    std::stringstream ss;
+    ss << "log." << index << "." << start_offset;
+    std::string path = dsn::utils::filesystem::path_combine(dir, ss.str());
 
-    if (dsn::utils::filesystem::path_exists(std::string(path)))
+    if (dsn::utils::filesystem::path_exists(path))
     {
-        dwarn("log file %s already exist", path);
+        dwarn("log file %s already exist", path.c_str());
         return nullptr;
     }
 
-    dsn_handle_t hfile = dsn_file_open(path, O_RDWR | O_CREAT | O_BINARY, 0666);
+    dsn_handle_t hfile = dsn_file_open(path.c_str(), O_RDWR | O_CREAT | O_BINARY, 0666);
     if (!hfile)
     {
-        dwarn("create log %s failed", path);
+        dwarn("create log %s failed", path.c_str());
         return nullptr;
     }
 

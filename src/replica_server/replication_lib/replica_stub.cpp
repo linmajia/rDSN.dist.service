@@ -40,6 +40,7 @@
 #include "mutation.h"
 #include <dsn/cpp/json_helper.h>
 #include "replication_app_base.h"
+#include <sstream>
 #include <vector>
 #include <deque>
 
@@ -1510,12 +1511,13 @@ void replica_stub::close()
 
 std::string replica_stub::get_replica_dir(const char* app_type, gpid gpid) const
 {
-    char buffer[256];
-    sprintf(buffer, "%u.%u.%s", gpid.get_app_id(), gpid.get_partition_index(), app_type);
+    std::stringstream ss;
+    ss << gpid.get_app_id() << "." << gpid.get_partition_index() << "." << app_type;
+    std::string replica_dir_name = ss.str();
     std::string ret_dir;
     for (auto& dir : _options.data_dirs)
     {
-        std::string cur_dir = utils::filesystem::path_combine(dir, buffer);
+        std::string cur_dir = utils::filesystem::path_combine(dir, replica_dir_name);
         if (utils::filesystem::directory_exists(cur_dir))
         {
             if (!ret_dir.empty())
@@ -1529,14 +1531,13 @@ std::string replica_stub::get_replica_dir(const char* app_type, gpid gpid) const
     {
         /*
         int r = dsn_random32(0, _options.data_dirs.size() - 1);
-        ret_dir = utils::filesystem::path_combine(_options.data_dirs[r], buffer);
+        ret_dir = utils::filesystem::path_combine(_options.data_dirs[r], replica_dir_name);
         */
         static std::atomic<int> next_id;
         int pos = (next_id++) % _options.data_dirs.size();
-        ret_dir = utils::filesystem::path_combine(_options.data_dirs[pos], buffer);
+        ret_dir = utils::filesystem::path_combine(_options.data_dirs[pos], replica_dir_name);
     }
     return ret_dir;
 }
 
 }} // namespace
-
