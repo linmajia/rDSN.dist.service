@@ -1872,7 +1872,7 @@ log_file::~log_file()
         return nullptr;
     }
 
-    return new log_file(path, hfile, index, start_offset, false);
+    return new log_file(path.c_str(), hfile, index, start_offset, false);
 }
 
 log_file::log_file(
