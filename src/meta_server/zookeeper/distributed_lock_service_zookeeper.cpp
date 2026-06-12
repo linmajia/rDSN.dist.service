@@ -33,7 +33,6 @@
  */
 #include <dsn/dist/replication/replication.codes.h>
 #include <zookeeper.h>
-#include <boost/lexical_cast.hpp>
 #include <functional>
 #include <algorithm>
 #include <utility>

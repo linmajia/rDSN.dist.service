@@ -37,9 +37,6 @@
 #include <memory>
 #include <vector>
 
-#include <boost/lexical_cast.hpp>
-#include <boost/algorithm/string.hpp>
-
 #include "distributed_lock_service_zookeeper.h"
 #include "lock_struct.h"
 #include "lock_types.h"

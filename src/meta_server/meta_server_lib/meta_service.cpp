@@ -34,8 +34,6 @@
  */
 #include <sys/stat.h>
 
-#include <boost/lexical_cast.hpp>
-
 #include <dsn/utility/factory_store.h>
 #include <dsn/dist/meta_state_service.h>
 

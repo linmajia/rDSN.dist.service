@@ -533,7 +533,7 @@ void event_on_task::init(task* tsk)
         _task_id = buf;
         _node = tsk->node_name();
         _task_code = dsn_task_code_to_string(tsk->code());
-        _delay = boost::lexical_cast<std::string>(tsk->delay_milliseconds());
+        _delay = std::to_string(tsk->delay_milliseconds());
     }
 }
 
@@ -664,8 +664,8 @@ void event_on_aio::init(aio_task* tsk)
     event_on_task::init(tsk);
     if (tsk->aio()->type == dsn::AIO_Invalid) return; // for flush task, the type is AIO_Invalid
     _type = (tsk->aio()->type == dsn::AIO_Read ? "READ" : "WRITE");
-    _file_offset = boost::lexical_cast<std::string>(tsk->aio()->file_offset);
-    _buffer_size = boost::lexical_cast<std::string>(tsk->aio()->buffer_size);
+    _file_offset = std::to_string(tsk->aio()->file_offset);
+    _buffer_size = std::to_string(tsk->aio()->buffer_size);
 }
 
 void event_on_aio_enqueue::internal_to_string(std::ostream& oss) const
@@ -701,7 +701,7 @@ void event_on_aio_enqueue::init(aio_task* tsk)
 {
     event_on_aio::init(tsk);
     _err = dsn_error_to_string(tsk->error());
-    _transferred_size = boost::lexical_cast<std::string>(tsk->get_transferred_size());
+    _transferred_size = std::to_string(tsk->get_transferred_size());
 }
 
 std::string event_case_line::to_string() const
@@ -1398,7 +1398,7 @@ void test_case::on_check()
     ++_null_loop_count;
     if (s_null_loop > 0 && _null_loop_count > s_null_loop)
     {
-        fail("null_loop:" + boost::lexical_cast<std::string>(s_null_loop));
+        fail("null_loop:" + std::to_string(s_null_loop));
     }
 }
 

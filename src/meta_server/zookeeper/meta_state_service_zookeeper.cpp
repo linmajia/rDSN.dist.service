@@ -33,9 +33,6 @@
  */
 #include <dsn/dist/replication/replication.codes.h>
 
-#include <boost/algorithm/string.hpp>
-#include <boost/lexical_cast.hpp>
-
 #include "meta_state_service_zookeeper.h"
 #include "zookeeper_session_mgr.h"
 #include "zookeeper_session.h"

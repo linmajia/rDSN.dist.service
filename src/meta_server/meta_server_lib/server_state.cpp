@@ -39,7 +39,6 @@
 # include <sstream>
 # include <cinttypes>
 # include <string>
-# include <boost/lexical_cast.hpp>
 
 # include "meta_service.h"
 # include "server_state.h"
@@ -432,7 +431,7 @@ dsn::error_code server_state::sync_apps_from_remote_storage()
                     ++_creating_apps_count;
                     for (int i = 0; i < app->partition_count; i++)
                     {
-                        std::string partition_path = app_path + "/" + boost::lexical_cast<std::string>(i);
+                        std::string partition_path = app_path + "/" + std::to_string(i);
                         sync_partition(app, i, partition_path);
                     }
                 }
