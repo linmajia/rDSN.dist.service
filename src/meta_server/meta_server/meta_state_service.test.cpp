@@ -1,7 +1,6 @@
 #include <dsn/dist/meta_state_service.h>
 #include "meta_state_service_simple.h"
 #include "../zookeeper/meta_state_service_zookeeper.h"
-#include <boost/lexical_cast.hpp>
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -176,7 +175,7 @@ void recursively_create_node_callback(
         return;
 
     for (int i=0; i!=10; ++i) {
-        std::string subroot = root+"/"+boost::lexical_cast<std::string>(i);
+        std::string subroot = root+"/"+std::to_string(i);
         service->create_node(
             subroot,
             META_STATE_SERVICE_SIMPLE_TEST_CALLBACK,

@@ -36,7 +36,6 @@
 #pragma once
 
 # include <unordered_map>
-# include <boost/lexical_cast.hpp>
 
 # include <dsn/dist/replication/replication_other_types.h>
 
@@ -135,7 +134,7 @@ private:
     }
     std::string get_app_path(const app_state& app) const
     {
-        return _apps_root + "/" + boost::lexical_cast<std::string>(app.app_id);
+        return _apps_root + "/" + std::to_string(app.app_id);
     }
     std::string get_partition_path(const dsn::gpid& gpid) const
     {

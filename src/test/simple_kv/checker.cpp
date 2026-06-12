@@ -47,7 +47,6 @@
 # include "../../common/replication_ds.h"
 
 # include <sstream>
-# include <boost/lexical_cast.hpp>
 
 # include <dsn/tool_api.h>
 
@@ -375,7 +374,7 @@ std::string test_checker::address_to_node_name(rpc_address addr)
     auto find = _address_to_node.find(addr.port());
     if (find != _address_to_node.end())
         return find->second;
-    return "node@" + boost::lexical_cast<std::string>(addr.port());
+    return "node@" + std::to_string(addr.port());
 }
 
 rpc_address test_checker::node_name_to_address(const std::string& name)

@@ -1,7 +1,6 @@
 #include "../zookeeper/distributed_lock_service_zookeeper.h"
 #include "../zookeeper/lock_struct.h"
 #include <vector>
-#include <boost/lexical_cast.hpp>
 #include <string>
 #include <functional>
 #include <dsn/service_api_cpp.h>

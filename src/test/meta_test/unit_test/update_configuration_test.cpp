@@ -193,7 +193,7 @@ static void generate_apps(app_mapper& mapper, const std::vector<dsn::rpc_address
     {
         dsn::app_info info;
         info.status = dsn::app_status::AS_CREATING;
-        info.app_name = "test_app" + boost::lexical_cast<std::string>(i);
+        info.app_name = "test_app" + std::to_string(i);
         info.app_type = "simple_kv";
         info.app_id = i;
         info.max_replica_count = 3;

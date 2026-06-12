@@ -97,7 +97,7 @@ void meta_service_test_app::state_sync_test()
             dsn::app_info info;
             info.is_stateful = true;
             info.app_id = i; info.app_type = "simple_kv";
-            info.app_name = "test_app" + boost::lexical_cast<std::string>(i);
+            info.app_name = "test_app" + std::to_string(i);
             info.max_replica_count = 3; info.partition_count = random32(100, 10000);
             info.status = dsn::app_status::AS_CREATING;
             std::shared_ptr<app_state> app = app_state::create(info);
@@ -106,7 +106,7 @@ void meta_service_test_app::state_sync_test()
             if (i<apps_count && random32(1, apps_count)<=drop_ratio) {
                 app->status = dsn::app_status::AS_DROPPED;
                 drop_set.push_back(i);
-                app->app_name = "test_app" + boost::lexical_cast<std::string>(apps_count);
+                app->app_name = "test_app" + std::to_string(apps_count);
             }
         }
         for (int i=1; i<=apps_count; ++i) {
