@@ -45,7 +45,6 @@
 # include <iostream>
 # include <string>
 # include <cstdio>
-# include <boost/lexical_cast.hpp>
 # include <boost/algorithm/string.hpp>
 
 # ifdef __TITLE__
@@ -169,47 +168,47 @@ bool set_case_line::parse(const std::string& params)
         const std::string& v = kv.second;
         if (k == "null_loop")
         {
-            _null_loop = boost::lexical_cast<int>(v);
+            _null_loop = ::dsn::utils::lexical_cast<int>(v);
             _null_loop_set = true;
         }
         else if (k == "load_balance_for_test")
         {
-            _lb_for_test = boost::lexical_cast<bool>(v);
+            _lb_for_test = ::dsn::utils::lexical_cast<bool>(v);
             _lb_for_test_set = true;
         }
         else if (k == "disable_load_balance")
         {
-            _disable_lb = boost::lexical_cast<bool>(v);
+            _disable_lb = ::dsn::utils::lexical_cast<bool>(v);
             _disable_lb_set = true;
         }
         else if (k == "close_replica_stub_on_exit")
         {
-            _close_replica_stub = boost::lexical_cast<bool>(v);
+            _close_replica_stub = ::dsn::utils::lexical_cast<bool>(v);
             _close_replica_stub_set = true;
         }
         else if (k == "not_exit_on_log_failure")
         {
-            _not_exit_on_log_failure = boost::lexical_cast<bool>(v);
+            _not_exit_on_log_failure = ::dsn::utils::lexical_cast<bool>(v);
             _not_exit_on_log_failure_set = true;
         }
         else if (k == "simple_kv_open_fail")
         {
-            _simple_kv_open_fail = boost::lexical_cast<bool>(v);
+            _simple_kv_open_fail = ::dsn::utils::lexical_cast<bool>(v);
             _simple_kv_open_fail_set = true;
         }
         else if (k == "simple_kv_close_fail")
         {
-            _simple_kv_close_fail = boost::lexical_cast<bool>(v);
+            _simple_kv_close_fail = ::dsn::utils::lexical_cast<bool>(v);
             _simple_kv_close_fail_set = true;
         }
         else if (k == "simple_kv_get_checkpoint_fail")
         {
-            _simple_kv_get_checkpoint_fail = boost::lexical_cast<bool>(v);
+            _simple_kv_get_checkpoint_fail = ::dsn::utils::lexical_cast<bool>(v);
             _simple_kv_get_checkpoint_fail_set = true;
         }
         else if (k == "simple_kv_apply_checkpoint_fail")
         {
-            _simple_kv_apply_checkpoint_fail = boost::lexical_cast<bool>(v);
+            _simple_kv_apply_checkpoint_fail = ::dsn::utils::lexical_cast<bool>(v);
             _simple_kv_apply_checkpoint_fail_set = true;
         }
         else
@@ -273,7 +272,7 @@ bool skip_case_line::parse(const std::string& params)
 {
     if (params.empty())
         return false;
-    _count = boost::lexical_cast<int>(params);
+    _count = ::dsn::utils::lexical_cast<int>(params);
     if (_count <= 0)
     {
         std::cerr << "bad line: line_no=" << line_no()
@@ -763,7 +762,7 @@ void modify_case_line::modify(const event* ev)
         const event_on_task* e = dynamic_cast<const event_on_task*>(ev);
         dassert(e != nullptr, "");
         dassert(e->_task != nullptr, "");
-        e->_task->set_delay(boost::lexical_cast<int>(_modify_delay));
+        e->_task->set_delay(::dsn::utils::lexical_cast<int>(_modify_delay));
     }
 }
 
@@ -840,31 +839,31 @@ bool client_case_line::parse(const std::string& params)
     {
     case begin_write:
     {
-        _id = boost::lexical_cast<int>(kv_map["id"]);
+        _id = ::dsn::utils::lexical_cast<int>(kv_map["id"]);
         _key = kv_map["key"];
         _value = kv_map["value"];
-        _timeout = boost::lexical_cast<int>(kv_map["timeout"]);
+        _timeout = ::dsn::utils::lexical_cast<int>(kv_map["timeout"]);
         break;
     }
     case begin_read:
     {
-        _id = boost::lexical_cast<int>(kv_map["id"]);
+        _id = ::dsn::utils::lexical_cast<int>(kv_map["id"]);
         _key = kv_map["key"];
-        _timeout = boost::lexical_cast<int>(kv_map["timeout"]);
+        _timeout = ::dsn::utils::lexical_cast<int>(kv_map["timeout"]);
         break;
     }
     case end_write:
     {
-        _id = boost::lexical_cast<int>(kv_map["id"]);
+        _id = ::dsn::utils::lexical_cast<int>(kv_map["id"]);
         _err = dsn_error_from_string(boost::algorithm::to_upper_copy(kv_map["err"]).c_str(), ERR_UNKNOWN);
-        _write_resp = boost::lexical_cast<int>(kv_map["resp"]);
+        _write_resp = ::dsn::utils::lexical_cast<int>(kv_map["resp"]);
         if (_err == ERR_UNKNOWN)
             parse_ok = false;
         break;
     }
     case end_read:
     {
-        _id = boost::lexical_cast<int>(kv_map["id"]);
+        _id = ::dsn::utils::lexical_cast<int>(kv_map["id"]);
         _err = dsn_error_from_string(boost::algorithm::to_upper_copy(kv_map["err"]).c_str(), ERR_UNKNOWN);
         _read_resp = kv_map["resp"];
         if (_err == ERR_UNKNOWN)
