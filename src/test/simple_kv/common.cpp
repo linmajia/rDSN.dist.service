@@ -39,7 +39,6 @@
 # include <dsn/cpp/utils.h>
 
 # include <sstream>
-# include <boost/lexical_cast.hpp>
 
 # ifdef __TITLE__
 # undef __TITLE__
@@ -113,8 +112,8 @@ bool gpid_from_string(const std::string& str, gpid& gpid)
     size_t pos = str.find('.');
     if (pos == std::string::npos)
         return false;
-    gpid.set_app_id(boost::lexical_cast<int32_t>(str.substr(0, pos)));
-    gpid.set_partition_index(boost::lexical_cast<int32_t>(str.substr(pos + 1)));
+    gpid.set_app_id(::dsn::utils::lexical_cast<int32_t>(str.substr(0, pos)));
+    gpid.set_partition_index(::dsn::utils::lexical_cast<int32_t>(str.substr(pos + 1)));
     return true;
 }
 
@@ -175,10 +174,10 @@ bool replica_state::from_string(const std::string& str)
     if (!id.from_string(splits[0]))
         return false;
     status = partition_status_from_short_string(splits[1]);
-    ballot = boost::lexical_cast<int64_t>(splits[2]);
-    last_committed_decree = boost::lexical_cast<decree>(splits[3]);
+    ballot = ::dsn::utils::lexical_cast<int64_t>(splits[2]);
+    last_committed_decree = ::dsn::utils::lexical_cast<decree>(splits[3]);
     if (splits.size() == 5)
-        last_durable_decree = boost::lexical_cast<decree>(splits[4]);
+        last_durable_decree = ::dsn::utils::lexical_cast<decree>(splits[4]);
     return true;
 }
 
@@ -326,7 +325,7 @@ bool parti_config::from_string(const std::string& str)
         return false;
 #endif
     // ballot
-    ballot = boost::lexical_cast<int64_t>(splits[i++]);
+    ballot = ::dsn::utils::lexical_cast<int64_t>(splits[i++]);
     // primary
     primary = splits[i++];
     // secondaries
