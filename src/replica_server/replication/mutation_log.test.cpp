@@ -76,8 +76,28 @@ static void overwrite_file(const char* file, int offset, const void* buf, int si
     ASSERT_EQ(0, r);
 }
 
+static void remove_log_file_test_artifacts()
+{
+    for (const auto& file : {
+        "log.1.100",
+        "log.1.0", "log.1.0.removed",
+        "log.1.1", "log.1.1.removed",
+        "log.1.2", "log.1.2.removed",
+        "log.1.3", "log.1.3.removed",
+        "log.1.4", "log.1.4.removed",
+    })
+    {
+        if (::dsn::utils::filesystem::file_exists(file))
+        {
+            ::dsn::utils::filesystem::remove_path(file);
+        }
+    }
+}
+
 TEST(replication, log_file)
 {
+    remove_log_file_test_artifacts();
+
     replica_log_info_map mdecrees;
     gpid gpid(1, 0);
 
@@ -283,6 +303,7 @@ TEST(replication, log_file)
     lf = nullptr;
 
     utils::filesystem::remove_path(fpath);
+    remove_log_file_test_artifacts();
 }
 
 TEST(replication, mutation_log)
