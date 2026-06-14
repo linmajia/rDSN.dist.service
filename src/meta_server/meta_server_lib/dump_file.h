@@ -48,10 +48,16 @@ inline void error_msg(int err_number, /*out*/char* buffer, int buflen)
     if (result != 0)
         fprintf(stderr, "maybe unknown err number(%d)", err_number);
 #else
+#if defined(__APPLE__) || ((_POSIX_C_SOURCE >= 200112L) && !defined(_GNU_SOURCE))
+    int result = strerror_r(err_number, buffer, buflen);
+    if (result != 0)
+        fprintf(stderr, "maybe unknown err number(%d)", err_number);
+#else
     char* result = strerror_r(err_number, buffer, buflen);
     if (result != buffer) {
         fprintf(stderr, "%s\n", result);
     }
+#endif
 #endif
 }
 

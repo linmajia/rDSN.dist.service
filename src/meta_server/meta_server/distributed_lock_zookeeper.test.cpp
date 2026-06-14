@@ -24,7 +24,7 @@ class simple_adder_server: public dsn::service_app
 public:
     simple_adder_server(dsn_gpid gpid) : ::dsn::service_app(gpid) {}
     
-    error_code start(int argc, char** argv)
+    error_code start(int argc, char** argv) override
     {
         ddebug("name: %s, argc=%d", name().c_str(), argc);
         for (int i=0; i!=argc; ++i)
@@ -49,7 +49,7 @@ public:
                            version);
                 }, 
                 DLOCK_CALLBACK, 
-                [this](error_code, const std::string&, int)
+                [](error_code, const std::string&, int)
                 {
                     dassert(false, "session expired");
                 }, 
@@ -68,7 +68,7 @@ public:
             task_ptr unlock_task = _dlock_service->unlock(
                 "test_lock", name(), true, 
                 DLOCK_CALLBACK, 
-                [this](error_code ec) {
+                [](error_code ec) {
                     EXPECT_TRUE(ERR_OK==ec);
                     ddebug("unlock, error code: %s", ec.to_string());
                 }
