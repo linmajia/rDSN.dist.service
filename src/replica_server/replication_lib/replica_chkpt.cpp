@@ -122,10 +122,10 @@ namespace dsn {
                         RPC_REPLICA_COPY_LAST_CHECKPOINT,
                         *rc,
                         this,
-                        [=](error_code err_local, learn_response&& response)
+                        [=](error_code err, learn_response&& response)
                         {
                             auto response_alloc = std::make_shared<learn_response>(std::move(response));
-                            on_copy_checkpoint_ack(err_local, rc, response_alloc);
+                            on_copy_checkpoint_ack(err, rc, response_alloc);
                         },
                         std::chrono::milliseconds(0),
                         gpid_to_thread_hash(get_gpid())

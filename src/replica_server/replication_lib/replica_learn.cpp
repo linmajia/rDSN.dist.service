@@ -1060,7 +1060,7 @@ error_code replica::apply_learned_state_from_private_log(learn_state& state)
     prepare_list plist(
         _app->last_committed_decree(),
         _options->max_mutation_count_in_prepare_list,
-        [this, &err](mutation_ptr& mu)
+        [this](mutation_ptr& mu)
         {
             if (mu->data.header.decree == _app->last_committed_decree() + 1)
             {
@@ -1071,7 +1071,7 @@ error_code replica::apply_learned_state_from_private_log(learn_state& state)
 
     err = mutation_log::replay(
         state.files,
-        [this, &plist](mutation_ptr& mu)
+        [&plist](mutation_ptr& mu)
         {
             auto d = mu->data.header.decree;
             if (d <= plist.last_committed_decree())
