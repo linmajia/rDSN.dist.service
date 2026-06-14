@@ -162,7 +162,7 @@ namespace dsn
 
             error_code err;
             std::string cowner;
-            uint64_t version;
+            uint64_t version = 0;
             bool is_new = false;
 
             {
@@ -366,7 +366,7 @@ namespace dsn
         {
             error_code err;
             std::string cowner;
-            uint64_t version;
+            uint64_t version = 0;
 
             {
                 zauto_lock l(_lock);

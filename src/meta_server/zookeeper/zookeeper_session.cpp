@@ -180,7 +180,7 @@ void zookeeper_session::visit(zoo_opcontext *ctx)
     };
 
     //TODO: the read ops from zookeeper might get the staled data, need to fix
-    int ec;
+    int ec = ZBADARGUMENTS;
     zoo_input& input = ctx->_input;
     const char* path = input._path.c_str();
     switch (ctx->_optype)

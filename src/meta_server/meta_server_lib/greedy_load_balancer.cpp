@@ -253,7 +253,7 @@ void greedy_load_balancer::greedy_balancer()
         dassert(iter->second.is_alive, "");
         dassert(node_id.find(iter->first) != node_id.end(), "");
         int from = node_id[iter->first];
-        walk_through_primary(*_view, iter->first, [&, this](const partition_configuration& replica_in_primary){
+        walk_through_primary(*_view, iter->first, [&](const partition_configuration& replica_in_primary){
             for (auto& target: replica_in_primary.secondaries)
             {
                 auto i = node_id.find(target);
