@@ -41,9 +41,10 @@
 # include <dsn/utility/link.h>
 # include <dsn/cpp/perf_counter_.h>
 
-#ifndef __linux__
-#pragma warning(disable: 4201)
-#endif
+# if defined(_MSC_VER)
+# pragma warning(push)
+# pragma warning(disable: 4201)
+# endif
 
 namespace dsn { namespace replication {
 
@@ -193,6 +194,6 @@ inline void mutation::set_id(ballot b, decree c)
 
 }} // namespace
 
-#ifndef __linux__
-#pragma warning(default: 4201)
-#endif
+# if defined(_MSC_VER)
+# pragma warning(pop)
+# endif

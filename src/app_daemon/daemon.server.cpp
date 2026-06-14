@@ -50,6 +50,14 @@
 # include <fcntl.h>
 # include <sys/wait.h>
 # include <unistd.h>
+# include <signal.h>
+# if defined(__APPLE__)
+# include <crt_externs.h>
+# define dsn_environ (*_NSGetEnviron())
+# else
+extern char **environ;
+# define dsn_environ environ
+# endif
 # endif
 
 using namespace ::dsn::replication;
@@ -79,7 +87,7 @@ namespace dsn
             return true;
         }
 
-# if defined(__linux__)
+# if !defined(_WIN32)
         static daemon_s_service* s_single_daemon = nullptr;
         void daemon_s_service::on_exit(::dsn::sys_exit_type st)
         {
@@ -93,7 +101,7 @@ namespace dsn
         daemon_s_service::daemon_s_service() 
             : ::dsn::serverlet<daemon_s_service>("daemon_s"), _online(false)
         {
-# if defined(__linux__)
+# if !defined(_WIN32)
             s_single_daemon = this;
             ::dsn::tools::sys_exit.put_back(daemon_s_service::on_exit, "daemon.exit");
             setpgid(0, 0);
@@ -966,7 +974,7 @@ namespace dsn
                             (char*)cargs.c_str(),
                             nullptr
                         };
-                        execve(exe_path, argv, environ);
+                        execve(exe_path, argv, dsn_environ);
                     }
                     else
                     {
@@ -979,7 +987,7 @@ namespace dsn
                             (char*)overwrites.c_str(),
                             nullptr
                         };
-                        execve(exe_path, argv, environ);
+                        execve(exe_path, argv, dsn_environ);
                     }
                     _exit(127);
                 }
