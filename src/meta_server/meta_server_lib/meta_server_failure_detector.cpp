@@ -119,7 +119,7 @@ void meta_server_failure_detector::acquire_leader_lock()
             primary_address().to_std_string(), 
             // lock granted
             LPC_META_SERVER_LEADER_LOCK_CALLBACK,
-            [this, &err, &local_owner_id](error_code ec, const std::string& owner, uint64_t version)
+            [&err, &local_owner_id](error_code ec, const std::string& owner, uint64_t version)
             {
                 err = ec;
                 local_owner_id = owner;
@@ -127,7 +127,7 @@ void meta_server_failure_detector::acquire_leader_lock()
 
             // lease expire
             LPC_META_SERVER_LEADER_LOCK_CALLBACK,
-            [this](error_code ec, const std::string& owner, uint64_t version)
+            [](error_code ec, const std::string& owner, uint64_t version)
             {
                 // let's take the easy way right now
                 dsn_exit(0);
