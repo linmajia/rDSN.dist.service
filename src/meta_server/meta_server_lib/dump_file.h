@@ -48,10 +48,16 @@ inline void error_msg(int err_number, /*out*/char* buffer, int buflen)
     if (result != 0)
         fprintf(stderr, "maybe unknown err number(%d)", err_number);
 #else
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
     char* result = strerror_r(err_number, buffer, buflen);
     if (result != buffer) {
         fprintf(stderr, "%s\n", result);
     }
+#else
+    int result = strerror_r(err_number, buffer, buflen);
+    if (result != 0)
+        fprintf(stderr, "maybe unknown err number(%d)", err_number);
+#endif
 #endif
 }
 

@@ -409,7 +409,7 @@ dsn::error_code server_state::sync_apps_from_remote_storage()
     auto sync_app = [&](const std::string& app_path)
     {
         storage->get_data(app_path, LPC_META_CALLBACK,
-            [this, app_path, &err, &tracker, &sync_partition](error_code ec, const blob& value)
+            [this, app_path, &err, &sync_partition](error_code ec, const blob& value)
             {
                 if (ec == ERR_OK)
                 {
@@ -1541,7 +1541,7 @@ void server_state::static_cli_json_state(void* context, int argc, const char** a
     auto _server_state = reinterpret_cast<server_state*>(context);
     std::stringstream out;
     _server_state->json_state(out);
-    auto danglingstring = new std::string(std::move(out.str()));
+    auto danglingstring = new std::string(out.str());
     reply->message = danglingstring->c_str();
     reply->size = danglingstring->size();
     reply->context = danglingstring;

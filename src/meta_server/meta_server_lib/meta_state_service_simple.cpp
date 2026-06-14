@@ -100,7 +100,7 @@ namespace dsn
                 __err_cb_bind_and_enqueue(task, internal_operation(), 0);
             }));
             auto continuation_task_ptr = continuation_task.get();
-            _task_queue.emplace(move(continuation_task));
+            _task_queue.emplace(std::move(continuation_task));
             _log_lock.unlock();
 
             file::write(
@@ -600,7 +600,7 @@ namespace dsn
                     tracker,
                     [=]() mutable
                     {
-                        cb_get_children(ERR_OK, move(result));
+                        cb_get_children(ERR_OK, std::move(result));
                     }
                     );
             }
