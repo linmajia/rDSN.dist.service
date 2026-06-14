@@ -35,7 +35,7 @@ public:
 
 public:
     virtual dsn::error_code start(int, char **argv) override;
-    virtual dsn::error_code stop(bool /*cleanup*/) { return dsn::ERR_OK; }
+    virtual dsn::error_code stop(bool /*cleanup*/) override { return dsn::ERR_OK; }
     void state_sync_test();
     void data_definition_op_test();
     void update_configuration_test();

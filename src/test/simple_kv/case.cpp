@@ -579,7 +579,7 @@ void event_on_rpc::init(message_ex* msg, task* tsk)
     if (msg != nullptr)
     {
         char buf[100];
-        snprintf_p(buf, sizeof(buf), "%016lx", msg->header->trace_id);
+        snprintf_p(buf, sizeof(buf), "%016" PRIx64, msg->header->trace_id);
         _trace_id = buf;
         _rpc_name = msg->header->rpc_name;
         _from = address_to_node(msg->header->from_address);
