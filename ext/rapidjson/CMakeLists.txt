@@ -6,6 +6,10 @@ set(git_tag ${RAPIDJSON_GIT_TAG})
 ExternalProject_Add(rapidjson_header
     GIT_REPOSITORY ${target_url}
     GIT_TAG ${RAPIDJSON_GIT_TAG}
+    GIT_SHALLOW TRUE
+    GIT_PROGRESS FALSE
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND ""
     INSTALL_COMMAND ""
 )
 

@@ -51,7 +51,7 @@ zookeeper_session_mgr::zookeeper_session_mgr()
     if (fp != nullptr)
         zoo_set_log_stream(fp);
 # else
-    printf("zoo log stream failure on windows, to be fixed\n");
+    fprintf(stderr, "zoo log stream failure on windows, to be fixed\n");
 # endif
 }
 
