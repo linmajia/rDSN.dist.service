@@ -1230,8 +1230,10 @@ void server_state::on_update_configuration(std::shared_ptr<configuration_update_
         std::stringstream ss;
         ss << *cfg_request;
         ddebug("another request is syncing with remote storage, ignore current request(%s)", ss.str().c_str());
-        //we don't reply the replica server, expect it to retry
+        // we don't reply the replica server, expect it to retry
         dsn_msg_release_ref(msg);
+        // ERR_IO_PENDING is used as a local sentinel here; no response will be sent on this path.
+        response.err.end_tracking();
         return;
     }
     else if (pc.ballot + 1 != cfg_request->config.ballot)
