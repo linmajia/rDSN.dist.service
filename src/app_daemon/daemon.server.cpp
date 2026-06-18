@@ -42,6 +42,7 @@
 # include <cctype>
 # include <cerrno>
 # include <fstream>
+# include <future>
 
 # if defined(__linux__)
 # include <sys/prctl.h>
@@ -89,12 +90,47 @@ namespace dsn
 
 # if !defined(_WIN32)
         static daemon_s_service* s_single_daemon = nullptr;
+
         void daemon_s_service::on_exit(::dsn::sys_exit_type st)
         {
+# if 0
             int pid = getpid();
             kill(-pid, SIGTERM);
             sleep(2);
             kill(-pid, SIGKILL);
+# else
+            if (s_single_daemon == nullptr)
+                return;
+
+            std::vector<std::shared_ptr<app_internal>> apps;
+            s_single_daemon->_lock.lock_read();
+            for (auto& pkg : s_single_daemon->_apps)
+            {
+                for (auto& app : pkg.second->apps)
+                {
+                    apps.push_back(app.second);
+                }
+            }
+            s_single_daemon->_lock.unlock_read();
+
+            std::packaged_task<void()> close_apps([apps = std::move(apps)]() mutable {
+                for (auto& app : apps)
+                {
+                    app->close();
+                }
+            });
+            std::future<void> close_future = close_apps.get_future();
+            std::thread close_thread(std::move(close_apps));
+
+            if (close_future.wait_for(std::chrono::seconds(2)) == std::future_status::ready)
+            {
+                close_thread.join();
+            }
+            else
+            {
+                close_thread.detach();
+            }
+# endif
         }
 # endif
 
