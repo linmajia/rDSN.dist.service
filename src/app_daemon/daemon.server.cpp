@@ -787,22 +787,9 @@ namespace dsn
                 }
 
                 // add deployment path as DSN_DEPLOYMENT_PATH
-# ifdef _WIN32
-                char exe_path[1024];
-                DWORD exe_path_len = ::GetModuleFileNameA(nullptr, exe_path, 1024);
-                if (exe_path_len == 0)
-                {
-                    dassert(false, "GetModuleFileNameA failed, err = %d", (int)::GetLastError());
-                }
-# else
-                char exe_path[1024];
-                ssize_t exe_path_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-                if (exe_path_len == -1)
-                {
-                    dassert(false, "read /proc/self/exe failed, err = %d", errno);
-                }
-                exe_path[exe_path_len] = '\0';
-# endif
+                std::string exe_path;
+                auto err = utils::filesystem::get_current_process_image_path(exe_path);
+                dassert(err == ERR_OK, "get_current_process_image_path failed, err = %s", err.to_string());
                 std::string host_name = utils::filesystem::get_file_name(exe_path);
                 dassert(host_name.substr(0, strlen("dsn.svchost")) == "dsn.svchost",
                     "invalid daemon exe name %s vs dsn.svchost",
@@ -957,7 +944,7 @@ namespace dsn
 
                     dwarn("try start app %s with command %s %s -cargs %s -overwrite %s at working dir %s ...",
                         app->info.app_type.c_str(),
-                        exe_path,
+                        exe_path.c_str(),
                         config_file.c_str(),
                         cargs.c_str(),
                         overwrites.c_str(),
@@ -974,7 +961,7 @@ namespace dsn
                             (char*)cargs.c_str(),
                             nullptr
                         };
-                        execve(exe_path, argv, dsn_environ);
+                        execve(exe_path.c_str(), argv, dsn_environ);
                     }
                     else
                     {
@@ -987,7 +974,7 @@ namespace dsn
                             (char*)overwrites.c_str(),
                             nullptr
                         };
-                        execve(exe_path, argv, dsn_environ);
+                        execve(exe_path.c_str(), argv, dsn_environ);
                     }
                     _exit(127);
                 }
