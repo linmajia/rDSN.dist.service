@@ -95,7 +95,8 @@ static void check_cure(server_load_balancer* lb, app_mapper& apps, node_mapper& 
 
     ns = &nodes[act.node];
     pc.primary = act.node;
-    std::remove(pc.secondaries.begin(), pc.secondaries.end(), pc.primary);
+    pc.secondaries.erase(std::remove(pc.secondaries.begin(), pc.secondaries.end(), pc.primary),
+                         pc.secondaries.end());
 
     ASSERT_TRUE(ns->primaries.insert(pc.pid).second);
     ASSERT_FALSE(ns->partitions.insert(pc.pid).second);
