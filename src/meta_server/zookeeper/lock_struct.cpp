@@ -82,10 +82,11 @@ static inline const char* string_zooevt(int zoo_event)
     return "invalid event";
 }
 
-static inline void __lock_task_bind_and_enqueue(lock_task_t lock_task, error_code ec, const std::string& id, int version)
+static inline void __lock_task_bind_and_enqueue(lock_task_t lock_task, error_code ec, const std::string& id, int64_t version)
 {
+    int64_t ver = (version < 0) ? (-1) : version;
     lock_task->bind_and_enqueue([&](distributed_lock_service::lock_callback& cb){
-        return std::bind(cb, ec, id, version);
+        return std::bind(cb, ec, id, static_cast<uint64_t>(ver));
     });
 }
 
