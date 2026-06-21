@@ -78,7 +78,8 @@ int main(int argc, char** argv)
     }
 
     // register all possible service apps
-    dsn::register_app< ::dsn::service::repli_app>("repli");
+    dassert(dsn::register_app< ::dsn::service::repli_app>("repli"),
+            "register repli app failed");
 
     dsn::service::repli_app::set_args(argc - 1, argv + 1);
 

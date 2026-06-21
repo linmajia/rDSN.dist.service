@@ -215,6 +215,5 @@ TEST(distributed_lock_service_zookeeper, abnormal_api_call)
 
 void lock_test_init()
 {
-    dsn::register_app<simple_adder_server>("adder");
+    dassert(dsn::register_app<simple_adder_server>("adder"), "register adder app failed");
 }
-

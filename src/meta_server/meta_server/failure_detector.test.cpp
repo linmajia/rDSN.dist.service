@@ -214,8 +214,8 @@ bool spin_wait_condition(const std::function<bool ()>& pred, int seconds)
 
 void fd_test_init()
 {
-    dsn::register_app<test_worker>("worker");
-    dsn::register_app<test_master>("master");
+    dassert(dsn::register_app<test_worker>("worker"), "register worker app failed");
+    dassert(dsn::register_app<test_master>("master"), "register master app failed");
     srand(time(0));
 }
 

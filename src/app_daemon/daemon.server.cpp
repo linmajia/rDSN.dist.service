@@ -65,7 +65,7 @@ using namespace ::dsn::replication;
 extern void daemon_register_test_server();
 
 MODULE_INIT_BEGIN(daemon)
-    dsn::register_app< ::dsn::dist::daemon>("daemon");
+    dassert(dsn::register_app< ::dsn::dist::daemon>("daemon"), "register daemon app failed");
     daemon_register_test_server();
 MODULE_INIT_END
 

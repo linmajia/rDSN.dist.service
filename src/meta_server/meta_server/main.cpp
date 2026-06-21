@@ -40,7 +40,8 @@ extern void fd_test_init();
 extern void lock_test_init();
 
 MODULE_INIT_BEGIN(meta)
-    dsn::register_app< ::dsn::service::meta_service_app>("meta");
+    dassert(dsn::register_app< ::dsn::service::meta_service_app>("meta"),
+            "register meta app failed");
     fd_test_init();
     lock_test_init();
 MODULE_INIT_END
