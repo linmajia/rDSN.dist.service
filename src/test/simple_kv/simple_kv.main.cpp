@@ -51,11 +51,17 @@ void dsn_app_registration_simple_kv()
     // register services
     dsn_task_code_register("RPC_L2_CLIENT_READ", TASK_TYPE_RPC_REQUEST, TASK_PRIORITY_COMMON, THREAD_POOL_LOCAL_APP);
     dsn_task_code_register("RPC_L2_CLIENT_WRITE", TASK_TYPE_RPC_REQUEST, TASK_PRIORITY_LOW, THREAD_POOL_REPLICATION);
-    dsn::register_layer2_framework< ::dsn::replication::replication_service_app>("replica", DSN_APP_MASK_FRAMEWORK);
+    dassert(dsn::register_layer2_framework< ::dsn::replication::replication_service_app>(
+                "replica", DSN_APP_MASK_FRAMEWORK),
+            "register replica layer2 framework failed");
 
-    dsn::register_app<dsn::service::meta_service_app>("meta");
-    dsn::register_app<dsn::replication::test::simple_kv_client_app>("client");
-    dsn::register_app_with_type_1_replication_support< ::dsn::replication::test::simple_kv_service_impl>("simple_kv");
+    dassert(dsn::register_app<dsn::service::meta_service_app>("meta"),
+            "register meta app failed");
+    dassert(dsn::register_app<dsn::replication::test::simple_kv_client_app>("client"),
+            "register client app failed");
+    dassert(dsn::register_app_with_type_1_replication_support<
+                ::dsn::replication::test::simple_kv_service_impl>("simple_kv"),
+            "register simple_kv type-1 replication app failed");
     //dsn::replication::register_replica_provider<dsn::replication::test::simple_kv_service_impl>("simple_kv");
 
     dsn::tools::register_toollet<dsn::replication::test::test_injector>("test_injector");
@@ -100,4 +106,3 @@ int main(int argc, char** argv)
 #endif
     return 0;
 }
-

@@ -54,7 +54,7 @@ dsn::error_code meta_service_test_app::start(int argc, char **argv)
 
 GTEST_API_ int main(int, char **)
 {
-    dsn::register_app<meta_service_test_app>("meta");
+    dassert(dsn::register_app<meta_service_test_app>("meta"), "register meta app failed");
     dsn_run_config("config-test.ini", true);
     return 0;
 }

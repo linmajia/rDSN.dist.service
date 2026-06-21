@@ -73,7 +73,8 @@ public:
 
 void daemon_register_test_server()
 {
-    dsn::register_app< daemon_test_server>("daemon.test.server");
+    dassert(dsn::register_app< daemon_test_server>("daemon.test.server"),
+            "register daemon.test.server app failed");
 }
 
 void create_test_server()
@@ -154,4 +155,3 @@ TEST(daemon, test_server_response)
     // kill service
     kill_test_server();
 }
-
