@@ -412,11 +412,18 @@ error_code replication_app_base::open_new_internal(replica* r, int64_t shared_lo
     {
         state.from_decree_excluded = lstate->from_decree_excluded;
         state.to_decree_included = lstate->to_decree_included;
-        state.meta = dsn::blob(
-            std::shared_ptr<char>((char*)buffer, [](char* buf) { dsn_transient_free((void*)buf); }),
-            (const char*)lstate->meta_state_ptr - (const char*)buffer, 
-            lstate->meta_state_size
-            );
+        std::shared_ptr<char> buffer_holder((char*)buffer, [](char* buf) { dsn_transient_free((void*)buf); });
+        buffer = nullptr;
+        if (lstate->meta_state_size > 0)
+        {
+            state.meta = dsn::blob(buffer_holder,
+                                   (const char*)lstate->meta_state_ptr - (const char*)buffer_holder.get(),
+                                   lstate->meta_state_size);
+        }
+        else
+        {
+            state.meta = dsn::blob();
+        }
 
         for (int i = 0; i < lstate->file_state_count; i++)
         {
