@@ -82,7 +82,7 @@ CALL "%bin%" "%prefix%.ini" "%prefix%.act"
 SET "ret=%ERRORLEVEL%"
 
 SET "log="
-FOR /R %%L IN (log.1.txt) DO IF NOT DEFINED log SET "log=%%L"
+FOR /R %%L IN (log.1.txt) DO IF NOT DEFINED log IF EXIST "%%L" SET "log=%%L"
 IF DEFINED log (
     FINDSTR /V /C:"FAILURE_DETECT" /C:"BEACON" /C:"beacon" /C:"THREAD_POOL_FD" "!log!" >"%prefix%.log"
     DEL /F /Q "!log!"
