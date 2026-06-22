@@ -46,6 +46,7 @@ set(MY_PROJ_LIB_PATH
 FILE(GLOB CASE_FILES "case-*")
 set(MY_BINPLACES
     "${CMAKE_CURRENT_SOURCE_DIR}/test.sh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test.cmd"
     "${CMAKE_CURRENT_SOURCE_DIR}/addcase.sh"
     "${CASE_FILES}"
 )
