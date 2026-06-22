@@ -37,7 +37,7 @@ set(MY_PROJ_LIBS dsn.dist.service.meta_server_lib
 set(MY_PROJ_LIB_PATH "")
 
 # Extra files that will be installed
-set(MY_BINPLACES test.sh config-test.ini)
+set(MY_BINPLACES test.sh test.cmd config-test.ini)
 
 dsn_add_executable()
 add_dependencies(${MY_PROJ_NAME} googletest)
