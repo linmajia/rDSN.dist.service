@@ -39,17 +39,17 @@ public:
             std::pair<task_ptr, task_ptr> task_pair = _dlock_service->lock(
                 "test_lock", name(), 
                 DLOCK_CALLBACK, 
-                [this](error_code ec, const std::string& name, int version)
+                [this](error_code ec, const std::string& name, uint64_t version)
                 {
                     EXPECT_TRUE(ERR_OK==ec);
                     EXPECT_TRUE( name==this->name() );
-                    ddebug("lock: error_code: %s, name: %s, lock version: %d", 
+                    ddebug("lock: error_code: %s, name: %s, lock version: %llu",
                            ec.to_string(), 
                            name.c_str(), 
-                           version);
+                           static_cast<unsigned long long>(version));
                 }, 
                 DLOCK_CALLBACK, 
-                [](error_code, const std::string&, int)
+                [](error_code, const std::string&, uint64_t)
                 {
                     dassert(false, "session expired");
                 }, 
@@ -129,7 +129,7 @@ TEST(distributed_lock_service_zookeeper, abnormal_api_call)
     std::pair<task_ptr, task_ptr> cb_pair = dlock_svc->lock(
         lock_id, my_id, 
         DLOCK_CALLBACK, 
-        [](error_code ec, const std::string&, int){
+        [](error_code ec, const std::string&, uint64_t){
             ASSERT_TRUE(ERR_OBJECT_NOT_FOUND==ec);
         },
         DLOCK_CALLBACK, 
@@ -142,7 +142,7 @@ TEST(distributed_lock_service_zookeeper, abnormal_api_call)
     opt.create_if_not_exist = true;
     cb_pair = dlock_svc->lock(
         lock_id, my_id, 
-        DLOCK_CALLBACK, [](error_code ec, const std::string&, int)
+        DLOCK_CALLBACK, [](error_code ec, const std::string&, uint64_t)
         {
             ASSERT_TRUE(ec == ERR_OK);
         }, 
@@ -156,7 +156,7 @@ TEST(distributed_lock_service_zookeeper, abnormal_api_call)
     // recursive lock
     std::pair<task_ptr, task_ptr> cb_pair2 = dlock_svc->lock(lock_id, my_id, 
         DLOCK_CALLBACK, 
-        [](error_code ec, const std::string&, int)
+        [](error_code ec, const std::string&, uint64_t)
         {
             ASSERT_TRUE(ec == ERR_RECURSIVE_LOCK);
         }, 
@@ -171,7 +171,7 @@ TEST(distributed_lock_service_zookeeper, abnormal_api_call)
     cb_pair.first->wait();
     // try to cancel an locked lock
     task_ptr tsk = dlock_svc->cancel_pending_lock(lock_id, my_id, 
-        DLOCK_CALLBACK, [](error_code ec, const std::string&, int){
+        DLOCK_CALLBACK, [](error_code ec, const std::string&, uint64_t){
             ASSERT_TRUE(ec == ERR_INVALID_PARAMETERS);
         } 
     );
@@ -179,12 +179,12 @@ TEST(distributed_lock_service_zookeeper, abnormal_api_call)
     
     // try to cancel an non-exist lock
     tsk = dlock_svc->cancel_pending_lock(lock_id, "non-exist-myself", 
-        DLOCK_CALLBACK, [](error_code ec, const std::string&, int) { ASSERT_TRUE(ec==ERR_OBJECT_NOT_FOUND); }
+        DLOCK_CALLBACK, [](error_code ec, const std::string&, uint64_t) { ASSERT_TRUE(ec==ERR_OBJECT_NOT_FOUND); }
     );
     tsk->wait();
     
     tsk = dlock_svc->query_lock(lock_id, DLOCK_CALLBACK, 
-        [my_id](error_code ec, const std::string& name, int) {
+        [my_id](error_code ec, const std::string& name, uint64_t) {
             ASSERT_TRUE(ec==ERR_OK);
             ASSERT_TRUE(name == my_id);
         }
@@ -192,7 +192,7 @@ TEST(distributed_lock_service_zookeeper, abnormal_api_call)
     tsk->wait();
     
     cb_pair2 = dlock_svc->lock(lock_id, my_id2, 
-        DLOCK_CALLBACK, [my_id2](error_code ec, const std::string& name, int) { 
+        DLOCK_CALLBACK, [my_id2](error_code ec, const std::string& name, uint64_t) {
             ASSERT_TRUE(ec==ERR_OK);
             ASSERT_TRUE(name == my_id2);
         }, 
