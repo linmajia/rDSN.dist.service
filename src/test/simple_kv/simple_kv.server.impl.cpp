@@ -25,6 +25,7 @@
 */
 #include "simple_kv.server.impl.h"
 #include <dsn/cpp/utils.h>
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 
@@ -39,7 +40,7 @@ namespace dsn {
     namespace replication {
         namespace test {
 
-            static bool parse_checkpoint_version(const std::string &name, int64_t *version)
+            static bool parse_checkpoint_version(const std::string& name, int64_t& version)
             {
                 const char *prefix = "checkpoint.";
                 if (name.substr(0, strlen(prefix)) != std::string(prefix))
@@ -47,12 +48,52 @@ namespace dsn {
                     return false;
                 }
 
-                if (!::dsn::utils::lexical_cast_integer<int64_t>(name.substr(strlen(prefix)), *version))
+                if (!::dsn::utils::lexical_cast_integer<int64_t>(name.substr(strlen(prefix)), version))
                 {
                     return false;
                 }
 
                 return true;
+            }
+
+            static bool read_checkpoint_exact(std::ifstream& is, char* buffer, size_t size, size_t& remaining)
+            {
+                if (remaining < size)
+                {
+                    return false;
+                }
+
+                is.read(buffer, size);
+                if (!is)
+                {
+                    return false;
+                }
+
+                remaining -= size;
+                return true;
+            }
+
+            static bool read_checkpoint_string(std::ifstream& is, std::string& value, size_t& remaining)
+            {
+                uint32_t sz;
+                if (!read_checkpoint_exact(is, reinterpret_cast<char*>(&sz), sizeof(sz), remaining))
+                {
+                    return false;
+                }
+
+                if (remaining < static_cast<size_t>(sz))
+                {
+                    return false;
+                }
+
+                if (sz == 0)
+                {
+                    value.clear();
+                    return true;
+                }
+
+                value.resize(sz);
+                return read_checkpoint_exact(is, &value[0], sz, remaining);
             }
 
             bool simple_kv_service_impl::s_simple_kv_open_fail = false;
@@ -124,7 +165,12 @@ namespace dsn {
                 }
 
                 dsn::service::zauto_lock l(_lock);
-                recover();
+                auto err = recover();
+                if (err != ERR_OK)
+                {
+                    return err;
+                }
+
                 ddebug("simple_kv_service_impl opened");
                 return ERR_OK;
             }
@@ -152,82 +198,117 @@ namespace dsn {
             }
 
             // checkpoint related
-            void simple_kv_service_impl::recover()
+            // Fault injection showed checkpoint files can be left truncated or malformed when
+            // writes fail. Do not trust the newest checkpoint blindly: scan checkpoint candidates
+            // from newest to oldest, validate the complete file before loading it into _store, and
+            // only report corruption when every checkpoint candidate is invalid.
+            ::dsn::error_code simple_kv_service_impl::recover()
             {
                 dsn::service::zauto_lock l(_lock);
 
                 _store.clear();
-
-                int64_t max_version = 0;
-                std::string name;
 
                 std::vector<std::string> sub_list;
                 std::string path = data_dir();
                 if (!dsn::utils::filesystem::get_subfiles(path, sub_list, false))
                 {
-                    dassert(false, "Fail to get subfiles in %s.", path.c_str());
+                    derror("Fail to get subfiles in %s.", path.c_str());
+                    return ERR_FILE_OPERATION_FAILED;
                 }
+                if (sub_list.empty())
+                {
+                    ddebug("simple_kv_service_impl found no checkpoint files in %s.", path.c_str());
+                    return ERR_OK;
+                }
+
+                typedef std::pair<int64_t, std::string> checkpoint_info;
+                std::vector<checkpoint_info> checkpoints;
                 for (auto& fpath : sub_list)
                 {
                     auto&& s = dsn::utils::filesystem::get_file_name(fpath);
                     int64_t version = 0;
-                    if (!parse_checkpoint_version(s, &version))
+                    if (!parse_checkpoint_version(s, version))
                     {
                         continue;
                     }
 
-                    if (version > max_version)
-                    {
-                        max_version = version;
-                        name = std::string(data_dir()) + "/" + s;
-                    }
+                    checkpoints.push_back(
+                        checkpoint_info(version, std::string(data_dir()) + "/" + s));
                 }
                 sub_list.clear();
-
-                if (max_version > 0)
+                if (checkpoints.empty())
                 {
-                    recover(name, max_version);
-                    set_last_durable_decree(max_version);
+                    ddebug("simple_kv_service_impl found no checkpoint files in %s.", path.c_str());
+                    return ERR_OK;
                 }
-                ddebug("simple_kv_service_impl recovered, last_durable_decree = %" PRId64 "",
-                       last_durable_decree());
+
+                std::sort(checkpoints.rbegin(), checkpoints.rend());
+                for (const auto &checkpoint : checkpoints)
+                {
+                    if (recover(checkpoint.second, checkpoint.first))
+                    {
+                        set_last_durable_decree(checkpoint.first);
+                        return ERR_OK;
+                    }
+
+                    derror("simple_kv_service_impl ignored invalid checkpoint %s",
+                           checkpoint.second.c_str());
+                }
+
+                return ERR_CORRUPTION;
             }
 
-            void simple_kv_service_impl::recover(const std::string& name, int64_t version)
+            bool simple_kv_service_impl::recover(const std::string& name, int64_t version)
             {
                 dsn::service::zauto_lock l(_lock);
 
+                int64_t file_size = 0;
+                if (!dsn::utils::filesystem::file_size(name, file_size) || file_size < 0)
+                {
+                    derror("simple_kv_service_impl get checkpoint file size failed: %s",
+                           name.c_str());
+                    return false;
+                }
+                size_t remaining = static_cast<size_t>(file_size);
+
                 std::ifstream is(name.c_str(), std::ios::binary);
                 if (!is.is_open())
-                    return;
+                {
+                    derror("simple_kv_service_impl open checkpoint failed: %s", name.c_str());
+                    return false;
+                }
 
-                _store.clear();
+                simple_kv store;
 
                 uint64_t count;
                 int magic;
 
-                is.read((char*)&count, sizeof(count));
-                is.read((char*)&magic, sizeof(magic));
-                dassert(magic == 0xdeadbeef, "invalid checkpoint");
+                if (!read_checkpoint_exact(is, reinterpret_cast<char *>(&count), sizeof(count), remaining) ||
+                    !read_checkpoint_exact(is, reinterpret_cast<char *>(&magic), sizeof(magic), remaining) ||
+                    magic != 0xdeadbeef)
+                {
+                    derror("simple_kv_service_impl invalid checkpoint header: %s", name.c_str());
+                    return false;
+                }
 
                 for (uint64_t i = 0; i < count; i++)
                 {
                     std::string key;
                     std::string value;
 
-                    uint32_t sz;
-                    is.read((char*)&sz, (uint32_t)sizeof(sz));
-                    key.resize(sz);
+                    if (!read_checkpoint_string(is, key, remaining) ||
+                        !read_checkpoint_string(is, value, remaining))
+                    {
+                        derror("simple_kv_service_impl invalid checkpoint body: %s",
+                               name.c_str());
+                        return false;
+                    }
 
-                    is.read((char*)&key[0], sz);
-
-                    is.read((char*)&sz, (uint32_t)sizeof(sz));
-                    value.resize(sz);
-
-                    is.read((char*)&value[0], sz);
-
-                    _store[key] = value;
+                    store[key] = value;
                 }
+
+                _store.swap(store);
+                return true;
             }
 
             ::dsn::error_code simple_kv_service_impl::sync_checkpoint(int64_t last_commit)
@@ -246,7 +327,15 @@ namespace dsn {
                 std::stringstream ss;
                 ss << data_dir() << "/checkpoint." << last_commit;
                 std::string name = ss.str();
-                std::ofstream os(name, std::ios::binary);
+                std::string tmp_name = name + ".tmp";
+                dsn::utils::filesystem::remove_path(tmp_name);
+                std::ofstream os(tmp_name.c_str(), std::ios::binary | std::ios::trunc);
+                if (!os.is_open())
+                {
+                    derror("simple_kv_service_impl open checkpoint failed: %s",
+                           tmp_name.c_str());
+                    return ERR_CHECKPOINT_FAILED;
+                }
 
                 uint64_t count = (uint64_t)_store.size();
                 int magic = 0xdeadbeef;
@@ -260,13 +349,39 @@ namespace dsn {
                     uint32_t sz = (uint32_t)k.length();
 
                     os.write((const char*)&sz, (uint32_t)sizeof(sz));
-                    os.write((const char*)&k[0], sz);
+                    if (sz > 0)
+                    {
+                        os.write((const char*)&k[0], sz);
+                    }
 
                     const std::string& v = it->second;
                     sz = (uint32_t)v.length();
 
                     os.write((const char*)&sz, (uint32_t)sizeof(sz));
-                    os.write((const char*)&v[0], sz);
+                    if (sz > 0)
+                    {
+                        os.write((const char*)&v[0], sz);
+                    }
+                }
+
+                os.flush();
+                bool write_succeed = os.good();
+                os.close();
+                write_succeed = write_succeed && os.good();
+                if (!write_succeed)
+                {
+                    derror("simple_kv_service_impl write checkpoint failed: %s",
+                           tmp_name.c_str());
+                    dsn::utils::filesystem::remove_path(tmp_name);
+                    return ERR_CHECKPOINT_FAILED;
+                }
+
+                if (!utils::filesystem::rename_path(tmp_name, name))
+                {
+                    derror("simple_kv_service_impl publish checkpoint failed: %s",
+                           name.c_str());
+                    dsn::utils::filesystem::remove_path(tmp_name);
+                    return ERR_CHECKPOINT_FAILED;
                 }
 
                 set_last_durable_decree(last_commit);
@@ -333,7 +448,13 @@ namespace dsn {
 
                 if (mode == DSN_CHKPT_LEARN)
                 {
-                    recover(state.files[0], state.to_decree_included);
+                    if (state.file_state_count <= 0 ||
+                        !recover(state.files[0], state.to_decree_included))
+                    {
+                        derror("simple_kv_service_impl learn checkpoint failed");
+                        return ERR_CHECKPOINT_FAILED;
+                    }
+
                     //ddebug("simple_kv_service_impl learn checkpoint succeed, last_committed_decree = %" PRId64 "", last_committed_decree());
                     return ERR_OK;
                 }

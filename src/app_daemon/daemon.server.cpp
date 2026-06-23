@@ -185,8 +185,8 @@ namespace dsn
             }
 
 # ifdef _WIN32
-            _job = CreateJobObjectA(NULL, NULL);
-            dassert(_job != NULL, "create windows job failed, err = %d", (int)::GetLastError());
+            _job = ::CreateJobObjectA(nullptr, nullptr);
+            dassert(_job != nullptr, "create windows job failed, err = %d", (int)::GetLastError());
 
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = { 0 };
 
@@ -892,7 +892,7 @@ namespace dsn
                 SECURITY_ATTRIBUTES sa;
 
                 sa.nLength = sizeof(sa);
-                sa.lpSecurityDescriptor = NULL;
+                sa.lpSecurityDescriptor = nullptr;
                 sa.bInheritHandle = TRUE;
 
                 ZeroMemory(&si, sizeof(si));
@@ -906,7 +906,7 @@ namespace dsn
                     &sa,
                     OPEN_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL,
-                    NULL
+                    nullptr
                 );
                 if (si.hStdError == INVALID_HANDLE_VALUE)
                 {
@@ -921,7 +921,7 @@ namespace dsn
                     &sa,
                     OPEN_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL,
-                    NULL
+                    nullptr
                 );
                 if (si.hStdOutput == INVALID_HANDLE_VALUE)
                 {
@@ -933,8 +933,8 @@ namespace dsn
                 si.hStdInput = nullptr;
                 si.dwFlags |= STARTF_USESTDHANDLES;
 
-                if (::CreateProcessA(NULL, (LPSTR)command.c_str(), NULL, NULL, TRUE, CREATE_NEW_CONSOLE, 
-                    NULL, // env
+                if (::CreateProcessA(nullptr, (LPSTR)command.c_str(), nullptr, nullptr, TRUE, CREATE_NEW_CONSOLE,
+                    nullptr, // env
                     (LPSTR)app->working_dir.c_str(), &si, &pi))
                 {
                     if (0 == ::AssignProcessToJobObject(_job, pi.hProcess))

@@ -57,7 +57,7 @@ int main(int argc, char** argv)
     int slen;
 
 # if defined(_WIN32)
-    slen = ::GetModuleFileNameA(NULL, buf, sizeof(buf));
+    slen = ::GetModuleFileNameA(nullptr, buf, sizeof(buf));
 # else
     slen = readlink("/proc/self/exe", buf, sizeof(buf));
 # endif
