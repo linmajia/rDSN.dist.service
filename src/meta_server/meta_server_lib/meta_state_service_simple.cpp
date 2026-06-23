@@ -37,6 +37,7 @@
 # include "meta_state_service_simple.h"
 # include <dsn/tool-api/task.h>
 
+# include <chrono>
 # include <stack>
 # include <utility>
 
@@ -89,6 +90,49 @@ namespace dsn
                 );
         }
 
+        void meta_state_service_simple::write_log_file(blob log_blob,
+                                                       uint64_t log_offset,
+                                                       operation* continuation_task,
+                                                       int remaining_retries)
+        {
+            file::write(
+                _log,
+                log_blob.data(),
+                log_blob.length(),
+                log_offset,
+                LPC_META_STATE_SERVICE_SIMPLE_INTERNAL,
+                this,
+                [=](error_code err, size_t bytes)
+                {
+                    if (err == ERR_TRY_AGAIN && remaining_retries > 0)
+                    {
+                        tasking::enqueue_timer(
+                            LPC_META_STATE_SERVICE_SIMPLE_INTERNAL,
+                            this,
+                            [=] {
+                                write_log_file(
+                                    log_blob, log_offset, continuation_task, remaining_retries - 1);
+                            },
+                            std::chrono::milliseconds(1));
+                        return;
+                    }
+
+                    dassert(err == ERR_OK && bytes == log_blob.length(), "we cannot handle logging failure now");
+                    _log_lock.lock();
+                    continuation_task->done = true;
+                    while (!_task_queue.empty())
+                    {
+                        if (!_task_queue.front()->done)
+                        {
+                            break;
+                        }
+                        _task_queue.front()->cb(true);
+                        _task_queue.pop();
+                    }
+                    _log_lock.unlock();
+                });
+        }
+
         void meta_state_service_simple::write_log(blob&& log_blob, std::function<error_code()> internal_operation, task_ptr task)
         {
             _log_lock.lock();
@@ -103,30 +147,7 @@ namespace dsn
             _task_queue.emplace(std::move(continuation_task));
             _log_lock.unlock();
 
-            file::write(
-                _log,
-                log_blob.data(),
-                log_blob.length(),
-                log_offset,
-                LPC_META_STATE_SERVICE_SIMPLE_INTERNAL,
-                this,
-                [=](error_code err, size_t bytes)
-                {
-                    dassert(err == ERR_OK && bytes == log_blob.length(), "we cannot handle logging failure now");
-                    _log_lock.lock();
-                    continuation_task_ptr->done = true;
-                    while (!_task_queue.empty())
-                    {
-                        if (!_task_queue.front()->done)
-                        {
-                            break;
-                        }
-                        _task_queue.front()->cb(true);
-                        _task_queue.pop();
-                    }
-                    _log_lock.unlock();
-                }
-                );
+            write_log_file(std::move(log_blob), log_offset, continuation_task_ptr, 3);
         }
 
 

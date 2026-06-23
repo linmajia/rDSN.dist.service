@@ -240,6 +240,10 @@ namespace dsn
                 );
 
             void write_log(blob&& log_blob, std::function<error_code(void)> internal_operation, task_ptr task);
+            void write_log_file(blob log_blob,
+                                uint64_t log_offset,
+                                operation* continuation_task,
+                                int remaining_retries);
 
             error_code create_node_internal(const std::string &node, const blob& blob);
             error_code delete_node_internal(const std::string &node, bool recursive);
@@ -261,4 +265,3 @@ namespace dsn
         };
     }
 }
-
