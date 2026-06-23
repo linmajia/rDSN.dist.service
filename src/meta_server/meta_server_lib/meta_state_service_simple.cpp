@@ -311,7 +311,10 @@ namespace dsn
                             dassert(false, "meta state server log corrupted");
                         }   
                     }
-                    fclose(fd);
+                    if (fclose(fd) != 0)
+                    {
+                        derror("failed to close meta state log %s", log_path.c_str());
+                    }
                 }
             }
 

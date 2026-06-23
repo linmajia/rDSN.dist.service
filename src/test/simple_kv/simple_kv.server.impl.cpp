@@ -24,6 +24,7 @@
 * THE SOFTWARE.
 */
 #include "simple_kv.server.impl.h"
+#include <dsn/cpp/utils.h>
 #include <fstream>
 #include <sstream>
 
@@ -37,6 +38,22 @@
 namespace dsn {
     namespace replication {
         namespace test {
+
+            static bool parse_checkpoint_version(const std::string &name, int64_t *version)
+            {
+                const char *prefix = "checkpoint.";
+                if (name.substr(0, strlen(prefix)) != std::string(prefix))
+                {
+                    return false;
+                }
+
+                if (!::dsn::utils::lexical_cast_integer<int64_t>(name.substr(strlen(prefix)), *version))
+                {
+                    return false;
+                }
+
+                return true;
+            }
 
             bool simple_kv_service_impl::s_simple_kv_open_fail = false;
             bool simple_kv_service_impl::s_simple_kv_close_fail = false;
@@ -153,10 +170,12 @@ namespace dsn {
                 for (auto& fpath : sub_list)
                 {
                     auto&& s = dsn::utils::filesystem::get_file_name(fpath);
-                    if (s.substr(0, strlen("checkpoint.")) != std::string("checkpoint."))
+                    int64_t version = 0;
+                    if (!parse_checkpoint_version(s, &version))
+                    {
                         continue;
+                    }
 
-                    int64_t version = static_cast<int64_t>(atoll(s.substr(strlen("checkpoint.")).c_str()));
                     if (version > max_version)
                     {
                         max_version = version;

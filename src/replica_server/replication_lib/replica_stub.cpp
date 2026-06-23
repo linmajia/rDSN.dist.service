@@ -39,6 +39,7 @@
 #include "mutation_log.h"
 #include "mutation.h"
 #include <dsn/cpp/json_helper.h>
+#include <dsn/cpp/utils.h>
 #include "replication_app_base.h"
 #include <sstream>
 #include <vector>
@@ -464,19 +465,31 @@ void replica_stub::on_kill_app_cli(void *context, int argc, const char **argv, d
     error_code err = ERR_INVALID_PARAMETERS;
     if (argc >= 2)
     {
-        gpid gpid;
-        gpid.set_app_id(atoi(argv[0]));
-        gpid.set_partition_index(atoi(argv[1]));
-
-        replica_ptr r = get_replica(gpid);
-        if (r == nullptr)
+        int app_id = 0;
+        int partition_index = 0;
+        if (!::dsn::utils::lexical_cast_integer<int>(argv[0], app_id) ||
+            (app_id < 0) ||
+            !::dsn::utils::lexical_cast_integer<int>(argv[1], partition_index) ||
+            (partition_index < 0))
         {
-            err = ERR_OBJECT_NOT_FOUND;
+            derror("invalid gpid arguments: %s.%s", argv[0], argv[1]);
         }
         else
         {
-            r->inject_error(ERR_INJECTED);
-            err = ERR_OK;
+            gpid gpid;
+            gpid.set_app_id(app_id);
+            gpid.set_partition_index(partition_index);
+
+            replica_ptr r = get_replica(gpid);
+            if (r == nullptr)
+            {
+                err = ERR_OBJECT_NOT_FOUND;
+            }
+            else
+            {
+                r->inject_error(ERR_INJECTED);
+                err = ERR_OK;
+            }
         }
     }
 
