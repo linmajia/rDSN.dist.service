@@ -38,6 +38,7 @@
 # include "mutation.h"
 # include <dsn/utility/factory_store.h>
 # include "mutation_log.h"
+# include <exception>
 # include <fstream>
 # include <sstream>
 
@@ -138,17 +139,26 @@ error_code replica_app_info::load(const char* file)
     is.read((char*)buffer.get(), sz);
     is.close();
     
-    binary_reader reader(blob(buffer, sz));
-    int magic;
-    unmarshall(reader, magic, DSF_THRIFT_BINARY);
-
-    if (magic != 0xdeadbeef)
+    try
     {
-        derror("data in file %s is invalid (magic)", file);
+        binary_reader reader(blob(buffer, sz));
+        int magic;
+        unmarshall(reader, magic, DSF_THRIFT_BINARY);
+
+        if (magic != 0xdeadbeef)
+        {
+            derror("data in file %s is invalid (magic)", file);
+            return ERR_INVALID_DATA;
+        }
+
+        unmarshall(reader, *_app, DSF_THRIFT_JSON);
+    }
+    catch (const std::exception& err)
+    {
+        derror("data in file %s is invalid, err: %s", file, err.what());
         return ERR_INVALID_DATA;
     }
 
-    unmarshall(reader, *_app, DSF_THRIFT_JSON);
     return ERR_OK;
 }
 
