@@ -40,7 +40,6 @@
 # include <dsn/tool_api.h>
 # include <dsn/utility/module_init.cpp.h>
 # include <cctype>
-# include <cerrno>
 # include <fstream>
 # include <future>
 
@@ -73,6 +72,17 @@ namespace dsn
 {
     namespace dist
     {
+# ifdef _WIN32
+        static void close_handle_if_valid(HANDLE handle, const char *name)
+        {
+            if (handle != nullptr && handle != INVALID_HANDLE_VALUE &&
+                (::CloseHandle(handle) == FALSE))
+            {
+                derror("CloseHandle(%s) failed, err = %d", name, (int)::GetLastError());
+            }
+        }
+# endif
+
         static bool is_valid_package_name(const std::string& name)
         {
             if (name.empty() || name == "." || name == "..")
@@ -424,31 +434,44 @@ namespace dsn
             error_code err = ERR_INVALID_PARAMETERS;
             if (argc >= 2)
             {
-                gpid gpid;
-                gpid.set_app_id(atoi(argv[0]));
-                gpid.set_partition_index(atoi(argv[1]));
-                std::shared_ptr<app_internal> app = nullptr;
+                int app_id = 0;
+                int partition_index = 0;
+                if (!::dsn::utils::lexical_cast_integer<int>(argv[0], app_id) ||
+                    (app_id < 0) ||
+                    !::dsn::utils::lexical_cast_integer<int>(argv[1], partition_index) ||
+                    (partition_index < 0))
                 {
-                    ::dsn::service::zauto_write_lock l(_lock);
-                    for (auto& pkg : _apps)
-                    {
-                        auto it = pkg.second->apps.find(gpid);
-                        if (it != pkg.second->apps.end())
-                        {
-                            app = it->second;
-                            break;
-                        }
-                    }
-                }
-
-                if (app == nullptr)
-                {
-                    err = ERR_OBJECT_NOT_FOUND;
+                    derror("invalid gpid arguments: %s.%s", argv[0], argv[1]);
+                    err = ERR_INVALID_PARAMETERS;
                 }
                 else
                 {
-                    kill_app(std::move(app));
-                    err = ERR_OK;
+                    gpid gpid;
+                    gpid.set_app_id(app_id);
+                    gpid.set_partition_index(partition_index);
+                    std::shared_ptr<app_internal> app = nullptr;
+                    {
+                        ::dsn::service::zauto_write_lock l(_lock);
+                        for (auto& pkg : _apps)
+                        {
+                            auto it = pkg.second->apps.find(gpid);
+                            if (it != pkg.second->apps.end())
+                            {
+                                app = it->second;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (app == nullptr)
+                    {
+                        err = ERR_OBJECT_NOT_FOUND;
+                    }
+                    else
+                    {
+                        kill_app(std::move(app));
+                        err = ERR_OK;
+                    }
                 }
             }
 
@@ -753,9 +776,15 @@ namespace dsn
 # ifdef _WIN32
             if (nullptr != process_handle)
             {
-                ::GetExitCodeProcess(process_handle, (LPDWORD)&exit_code);
-                ::TerminateProcess(process_handle, 0);
-                ::CloseHandle(process_handle);
+                if (::GetExitCodeProcess(process_handle, (LPDWORD)&exit_code) == FALSE)
+                {
+                    derror("GetExitCodeProcess failed, err = %d", (int)::GetLastError());
+                }
+                if (::TerminateProcess(process_handle, 0) == FALSE)
+                {
+                    derror("TerminateProcess failed, err = %d", (int)::GetLastError());
+                }
+                close_handle_if_valid(process_handle, "process_handle");
                 process_handle = nullptr;
             }
 # else
@@ -879,6 +908,11 @@ namespace dsn
                     FILE_ATTRIBUTE_NORMAL,
                     NULL
                 );
+                if (si.hStdError == INVALID_HANDLE_VALUE)
+                {
+                    derror("open stderr file failed, err = %d", (int)::GetLastError());
+                    break;
+                }
 
                 si.hStdOutput = ::CreateFileA(
                     utils::filesystem::path_combine(app->working_dir, "foo.out").c_str(),
@@ -889,6 +923,12 @@ namespace dsn
                     FILE_ATTRIBUTE_NORMAL,
                     NULL
                 );
+                if (si.hStdOutput == INVALID_HANDLE_VALUE)
+                {
+                    derror("open stdout file failed, err = %d", (int)::GetLastError());
+                    close_handle_if_valid(si.hStdError, "stderr");
+                    break;
+                }
 
                 si.hStdInput = nullptr;
                 si.dwFlags |= STARTF_USESTDHANDLES;
@@ -899,18 +939,18 @@ namespace dsn
                 {
                     if (0 == ::AssignProcessToJobObject(_job, pi.hProcess))
                     {
-                        // dassert(false, "cannot attach process to job, err = %d", ::GetLastError());
+                        derror("cannot attach process to job, err = %d", (int)::GetLastError());
                     }
 
                     app->process_handle = pi.hProcess;
-                    CloseHandle(pi.hThread);  
-                    CloseHandle(si.hStdError);
-                    CloseHandle(si.hStdOutput);
+                    close_handle_if_valid(pi.hThread, "process thread");
+                    close_handle_if_valid(si.hStdError, "stderr");
+                    close_handle_if_valid(si.hStdOutput, "stdout");
                 }
                 else
                 {
-                    CloseHandle(si.hStdError);
-                    CloseHandle(si.hStdOutput);
+                    close_handle_if_valid(si.hStdError, "stderr");
+                    close_handle_if_valid(si.hStdOutput, "stdout");
 
                     derror("create process (CreateProcess) failed, err = %d", (int)::GetLastError());
                     break;
@@ -934,7 +974,7 @@ namespace dsn
                     );
                     dassert(serr >= 0, "open stderr file failed, err = %d", errno);
                     ret = dup2(serr, STDERR_FILENO);
-                    close(serr);
+                    dassert(close(serr) == 0, "close stderr file failed, err = %d", errno);
                     if (ret == -1)
                     {
                         dassert(false, "redirect stderr failed, err = %d", errno);
@@ -946,7 +986,7 @@ namespace dsn
                     );
                     dassert(sout >= 0, "open stdout file failed, err = %d", errno);
                     ret = dup2(sout, STDOUT_FILENO);
-                    close(sout);
+                    dassert(close(sout) == 0, "close stdout file failed, err = %d", errno);
                     if (ret == -1)
                     {
                         dassert(false, "redirect stdout failed, err = %d", errno);

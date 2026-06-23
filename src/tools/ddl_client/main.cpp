@@ -1,5 +1,6 @@
 #include <dsn/dist/replication/replication_ddl_client.h>
 
+#include <dsn/cpp/utils.h>
 #include <iostream>
 
 using namespace dsn;
@@ -89,12 +90,22 @@ int main(int argc, char** argv)
         }
         else if(strcmp(argv[index], "-pc") == 0 && index + 1 < argc)
         {
-            partition_count = atol(argv[++index]);
+            if (!::dsn::utils::lexical_cast_integer<int>(argv[++index], partition_count) ||
+                (partition_count < 1))
+            {
+                std::cerr << "invalid partition_count" << std::endl;
+                usage(argv[0]);
+            }
             std::cout << "partition_count:" << partition_count <<std::endl;
         }
         else if(strcmp(argv[index], "-rc") == 0 && index + 1 < argc)
         {
-            replica_count = atol(argv[++index]);
+            if (!::dsn::utils::lexical_cast_integer<int>(argv[++index], replica_count) ||
+                (replica_count < 1))
+            {
+                std::cerr << "invalid replica_count" << std::endl;
+                usage(argv[0]);
+            }
             std::cout << "replica_count:" << replica_count <<std::endl;
         }
         else if(strcmp(argv[index], "-status") == 0 && index + 1 < argc)
@@ -220,7 +231,14 @@ int main(int argc, char** argv)
 
         for (int i=3; i<argc-1; i+=2) {
             if (strcmp(argv[i], "-gpid") == 0){
-                sscanf(argv[i + 1], "%d.%d", &request.gpid.raw().u.app_id, &request.gpid.raw().u.partition_index);
+                if (sscanf(argv[i + 1],
+                           "%d.%d",
+                           &request.gpid.raw().u.app_id,
+                           &request.gpid.raw().u.partition_index) != 2)
+                {
+                    std::cerr << "invalid gpid" << std::endl;
+                    usage(argv[0]);
+                }
             }
             else if (strcmp(argv[i], "-type") == 0){
                 auto iter = action_map.find(argv[i+1]);

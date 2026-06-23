@@ -34,6 +34,8 @@
  */
 
 #include "replication_common.h"
+#include <dsn/cpp/utils.h>
+#include <cstdint>
 
 # ifdef __TITLE__
 # undef __TITLE__
@@ -406,7 +408,13 @@ void replica_helper::load_meta_servers(/*out*/ std::vector<dsn::rpc_address>& se
         auto pos1 = s.find_first_of(':');
         if (pos1 != std::string::npos)
         {
-            ::dsn::rpc_address ep(s.substr(0, pos1).c_str(), atoi(s.substr(pos1 + 1).c_str()));
+            uint16_t port = 0;
+            if (!::dsn::utils::lexical_cast_integer<uint16_t>(s.substr(pos1 + 1), port))
+            {
+                derror("invalid meta server port: %s", s.c_str());
+                continue;
+            }
+            ::dsn::rpc_address ep(s.substr(0, pos1).c_str(), port);
             servers.push_back(ep);
         }
     }

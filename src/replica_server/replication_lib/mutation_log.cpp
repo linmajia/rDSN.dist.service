@@ -39,6 +39,7 @@
 #include <io.h>
 #endif
 #include "replica.h"
+#include <dsn/cpp/utils.h>
 #include <sstream>
 
 # ifdef __TITLE__
@@ -1788,16 +1789,16 @@ log_file::~log_file()
         return nullptr;
     }
 
-    char* p = nullptr;
-    int index = static_cast<int>(strtol(index_str.c_str(), &p, 10));
-    if (*p != 0)
+    int index = 0;
+    if (!::dsn::utils::lexical_cast_integer<int>(index_str, index))
     {
         err = ERR_INVALID_PARAMETERS;
         dwarn("invalid log path %s", path);
         return nullptr;
     }
-    int64_t start_offset = static_cast<int64_t>(strtoll(start_offset_str.c_str(), &p, 10));
-    if (*p != 0)
+
+    int64_t start_offset = 0;
+    if (!::dsn::utils::lexical_cast_integer<int64_t>(start_offset_str, start_offset))
     {
         err = ERR_INVALID_PARAMETERS;
         dwarn("invalid log path %s", path);
