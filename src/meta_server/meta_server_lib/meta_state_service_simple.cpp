@@ -106,13 +106,14 @@ namespace dsn
                 {
                     if (err == ERR_TRY_AGAIN && remaining_retries > 0)
                     {
-                        tasking::enqueue_timer(
-                            LPC_META_STATE_SERVICE_SIMPLE_INTERNAL,
+                        tasking::enqueue(
+                            LPC_META_STATE_HIGH,
                             this,
                             [=] {
                                 write_log_file(
                                     log_blob, log_offset, continuation_task, remaining_retries - 1);
                             },
+                            0,
                             std::chrono::milliseconds(1));
                         return;
                     }
