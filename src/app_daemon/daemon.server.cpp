@@ -209,7 +209,8 @@ namespace dsn
         {
             dinfo("receive config proposal for %s with type %s at ballot %" PRId64,
                 proposal.info.app_name.c_str(),
-                enum_to_string(proposal.type)
+                enum_to_string(proposal.type),
+                proposal.config.ballot
                 );
 
             switch (proposal.type)

@@ -176,8 +176,8 @@ void mutation_log_shared::write_pending_mutations(bool release_lock)
             if (err == ERR_OK)
             {
                 dassert(sz == block->size(),
-                    "log write size must equal to the given size: %d vs %d",
-                    (int)sz,
+                    "log write size must equal to the given size: %zu vs %zu",
+                    sz,
                     block->size()
                 );
 
@@ -406,8 +406,8 @@ void mutation_log_private::write_pending_mutations(bool release_lock)
             if (err == ERR_OK)
             {
                 dassert(sz == block->size(),
-                    "log write size must equal to the given size: %d vs %d",
-                    (int)sz,
+                    "log write size must equal to the given size: %zu vs %zu",
+                    sz,
                     block->size()
                     );
 

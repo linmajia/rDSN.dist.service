@@ -156,7 +156,7 @@ public:
             {
                 if ( feof(_file_handle) )
                 {
-                    derror("unexpected file end, start offset of this block (%u)", ftell(_file_handle)-len-sizeof(hdr));
+                    derror("unexpected file end, start offset of this block (%ld)", (long)(ftell(_file_handle)-len-sizeof(hdr)));
                     return -1;
                 }
                 else if (errno != EINTR)

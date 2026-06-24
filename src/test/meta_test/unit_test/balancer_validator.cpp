@@ -125,7 +125,7 @@ void meta_service_test_app::balancer_validator()
 
         for (auto& iter: nodes)
         {
-            dinfo("node(%s) have %d primaries, %d partitions",
+            dinfo("node(%s) have %zu primaries, %zu partitions",
                 iter.first.to_string(),
                 iter.second.primaries.size(),
                 iter.second.partitions.size());
@@ -139,7 +139,7 @@ void meta_service_test_app::balancer_validator()
 
         for (auto& iter: nodes)
         {
-            dinfo("node(%s) have %d primaries, %d partitions",
+            dinfo("node(%s) have %zu primaries, %zu partitions",
                 iter.first.to_string(),
                 iter.second.primaries.size(),
                 iter.second.partitions.size());
