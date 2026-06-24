@@ -2,8 +2,8 @@
  * The MIT License (MIT)
  *
  * Copyright (c) 2015 Microsoft Corporation
- * 
- * -=- Robust Distributed System Nucleus (rDSN) -=- 
+ *
+ * -=- Robust Distributed System Nucleus (rDSN) -=-
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -37,8 +37,8 @@
 # include "fd.code.definition.h"
 # include <iostream>
 
-namespace dsn { namespace fd { 
-class failure_detector_service 
+namespace dsn { namespace fd {
+class failure_detector_service
     : public ::dsn::serverlet<failure_detector_service>
 {
 public:
@@ -47,14 +47,14 @@ public:
 
 protected:
     // all service handlers to be implemented further
-    // RPC_FD_FAILURE_DETECTOR_PING 
+    // RPC_FD_FAILURE_DETECTOR_PING
     virtual void on_ping(const beacon_msg& beacon, ::dsn::rpc_replier<beacon_ack>& reply)
     {
         std::cout << "... exec RPC_FD_FAILURE_DETECTOR_PING ... (not implemented) " << std::endl;
         beacon_ack resp;
         reply(resp);
     }
-    
+
 public:
     void open_service()
     {
@@ -67,4 +67,4 @@ public:
     }
 };
 
-} } 
+} }

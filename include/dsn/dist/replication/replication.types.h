@@ -6,7 +6,7 @@
 
 
 
-namespace dsn { namespace replication { 
+namespace dsn { namespace replication {
     GENERATED_TYPE_SERIALIZATION(mutation_header, THRIFT)
     GENERATED_TYPE_SERIALIZATION(mutation_update, THRIFT)
     GENERATED_TYPE_SERIALIZATION(mutation_data, THRIFT)
@@ -51,4 +51,4 @@ namespace dsn { namespace replication {
     GENERATED_TYPE_SERIALIZATION(query_replica_info_response, THRIFT)
     GENERATED_TYPE_SERIALIZATION(node_state, THRIFT)
 
-} } 
+} }

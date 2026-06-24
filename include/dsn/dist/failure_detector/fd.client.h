@@ -2,8 +2,8 @@
  * The MIT License (MIT)
  *
  * Copyright (c) 2015 Microsoft Corporation
- * 
- * -=- Robust Distributed System Nucleus (rDSN) -=- 
+ *
+ * -=- Robust Distributed System Nucleus (rDSN) -=-
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -38,8 +38,8 @@
 # include <iostream>
 
 
-namespace dsn { namespace fd { 
-class failure_detector_client 
+namespace dsn { namespace fd {
+class failure_detector_client
     : public virtual ::dsn::clientlet
 {
 public:
@@ -49,10 +49,10 @@ public:
 
 
     // ---------- call RPC_FD_FAILURE_DETECTOR_PING ------------
-    // - synchronous 
+    // - synchronous
     std::pair< ::dsn::error_code, beacon_ack> ping_sync(
-        const beacon_msg& beacon, 
-        std::chrono::milliseconds timeout = std::chrono::milliseconds(0), 
+        const beacon_msg& beacon,
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(0),
         int thread_hash = 0,
         uint64_t partition_hash = 0,
         dsn::optional< ::dsn::rpc_address> server_addr = dsn::none
@@ -71,11 +71,11 @@ public:
                 )
             );
     }
-    
-    // - asynchronous with on-stack beacon_msg and beacon_ack 
+
+    // - asynchronous with on-stack beacon_msg and beacon_ack
     template<typename TCallback>
     ::dsn::task_ptr ping(
-        const beacon_msg& beacon, 
+        const beacon_msg& beacon,
         TCallback&& callback,
         std::chrono::milliseconds timeout = std::chrono::milliseconds(0),
         int thread_hash = 0,
@@ -85,9 +85,9 @@ public:
         )
     {
         return ::dsn::rpc::call(
-                    server_addr.unwrap_or(_server), 
-                    RPC_FD_FAILURE_DETECTOR_PING, 
-                    beacon, 
+                    server_addr.unwrap_or(_server),
+                    RPC_FD_FAILURE_DETECTOR_PING,
+                    beacon,
                     this,
                     std::forward<TCallback>(callback),
                     timeout,
@@ -101,4 +101,4 @@ private:
     ::dsn::rpc_address _server;
 };
 
-} } 
+} }
