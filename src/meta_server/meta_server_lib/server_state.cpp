@@ -513,7 +513,7 @@ error_code server_state::initialize_data_structure()
     }
     else if (err == ERR_OK)
     {
-        ddebug("sync apps from remote storage ok, get %d apps, init the node state accordingly", _all_apps.size());
+        ddebug("sync apps from remote storage ok, get %d apps, init the node state accordingly", (int)_all_apps.size());
         initialize_node_state();
     }
     return err;
@@ -1402,7 +1402,7 @@ bool server_state::is_server_state_stable(int healthy_partitions)
     for (auto iter=_nodes.begin(); iter!=_nodes.end();) {
         if (!iter->second.is_alive) {
             if (!iter->second.partitions.empty()) {
-                ddebug("don't do replica migration coz dead node(%s) has %d partitions not removed",
+                ddebug("don't do replica migration coz dead node(%s) has %zu partitions not removed",
                        iter->second.address.to_string(), iter->second.partitions.size());
                 return false;
             }

@@ -379,7 +379,8 @@ void lock_struct::after_self_check(lock_struct_ptr _this, int ec, std::shared_pt
         ddebug("lock(%s) owner can't get the node, " 
                "treat as session expired , myself(%s:%s), owner(%s:%s)", 
                _this->_lock_id.c_str(), 
-               _this->_myself._node_seq_name.c_str(), _this->_myself._node_value.c_str());
+               _this->_myself._node_seq_name.c_str(), _this->_myself._node_value.c_str(),
+               _this->_owner._node_seq_name.c_str(), _this->_owner._node_value.c_str());
         _this->on_expire();
         return;
     }
@@ -557,7 +558,7 @@ void lock_struct::after_create_locknode(lock_struct_ptr _this, int ec, std::shar
 
     if (_this->_state==lock_state::cancelled || _this->_state==lock_state::expired)
     {
-        ddebug("current state(%s), ignore event create lockdir(%s)", _this->_lock_dir.c_str());
+        ddebug("current state(%s), ignore event create lockdir(%s)", string_state(_this->_state), _this->_lock_dir.c_str());
         if (ZOK == ec && _this->_state==lock_state::cancelled) {
             _this->remove_my_locknode(std::move(*path), IGNORE_CALLBACK, REMOVE_FOR_CANCEL);
         }

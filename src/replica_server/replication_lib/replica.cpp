@@ -56,7 +56,7 @@ replica::replica(replica_stub* stub, gpid gpid, const app_info& app, const char*
     dassert(stub != nullptr, "");
     _stub = stub;
     _dir = dir;
-    snprintf_p(_name, sizeof(_name), "%u.%u@%s", gpid.get_app_id(), gpid.get_partition_index(), stub->_primary_address.to_string());
+    snprintf_p(_name, sizeof(_name), "%d.%d@%s", gpid.get_app_id(), gpid.get_partition_index(), stub->_primary_address.to_string());
     _options = &stub->options();
     init_state();
     _config.pid = gpid;

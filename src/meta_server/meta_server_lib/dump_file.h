@@ -74,7 +74,11 @@ struct block_header{
 
 class dump_file {
 public:
-    ~dump_file() { fclose(_file_handle); }
+    ~dump_file()
+    {
+        if (_file_handle != nullptr)
+            fclose(_file_handle);
+    }
 
     static std::shared_ptr<dump_file> open_file(const char* filename, bool is_write)
     {
@@ -152,7 +156,7 @@ public:
             {
                 if ( feof(_file_handle) )
                 {
-                    derror("unexpected file end, start offset of this block (%u)", ftell(_file_handle)-len-sizeof(hdr));
+                    derror("unexpected file end, start offset of this block (%ld)", (long)(ftell(_file_handle)-len-sizeof(hdr)));
                     return -1;
                 }
                 else if (errno != EINTR)
