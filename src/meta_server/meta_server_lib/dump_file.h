@@ -74,7 +74,11 @@ struct block_header{
 
 class dump_file {
 public:
-    ~dump_file() { fclose(_file_handle); }
+    ~dump_file()
+    {
+        if (_file_handle != nullptr)
+            fclose(_file_handle);
+    }
 
     static std::shared_ptr<dump_file> open_file(const char* filename, bool is_write)
     {

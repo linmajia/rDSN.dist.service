@@ -207,11 +207,22 @@ pc_status simple_load_balancer::on_redundant_secondary(const meta_view& view, co
 {
     const node_mapper& nodes = *(view.nodes);
     const partition_configuration& pc = *get_config(*(view.apps), gpid);
+    action.type = config_type::CT_INVALID;
+    if (pc.secondaries.empty())
+        return pc_status::healthy;
+
     int target = 0;
-    int load = nodes.find(pc.secondaries.front())->second.partitions.size();
+    int load = -1;
     for (int i=0; i!=pc.secondaries.size(); ++i)
     {
-        int l = nodes.find(pc.secondaries[i])->second.partitions.size();
+        auto it = nodes.find(pc.secondaries[i]);
+        if (it == nodes.end())
+        {
+            target = i;
+            break;
+        }
+
+        int l = it->second.partitions.size();
         if (l > load)
         {
             load = l;
