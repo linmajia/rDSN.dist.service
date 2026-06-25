@@ -432,7 +432,15 @@ void meta_service::on_query_configuration_by_node(dsn_message_t msg)
     RPC_CHECK_STATUS(msg, response);
 
     configuration_query_by_node_request request;
-    dsn::unmarshall(msg, request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid query configuration by node request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(msg, response);
+        return;
+    }
+
     _state->query_configuration_by_node(request, response);
     reply(msg, response);    
 }
@@ -443,7 +451,15 @@ void meta_service::on_query_configuration_by_index(dsn_message_t msg)
     RPC_CHECK_STATUS(msg, response);
 
     configuration_query_by_index_request request;
-    dsn::unmarshall(msg, request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid query configuration by index request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(msg, response);
+        return;
+    }
+
     _state->query_configuration_by_index(request, response);
     reply(msg, response);
 }

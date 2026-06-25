@@ -38,6 +38,7 @@
 #include "mutation_log.h"
 #include "replica_stub.h"
 #include "replication_app_base.h"
+#include <exception>
 
 # ifdef __TITLE__
 # undef __TITLE__
@@ -210,9 +211,24 @@ void replica::on_prepare(dsn_message_t request)
     mutation_ptr mu;
 
     {
-        rpc_read_stream reader(request);
-        unmarshall(reader, rconfig, DSF_THRIFT_BINARY);
-        mu = mutation::read_from(reader, request);
+        try
+        {
+            rpc_read_stream reader(request);
+            unmarshall(reader, rconfig, DSF_THRIFT_BINARY);
+            mu = mutation::read_from(reader, request);
+        }
+        catch (const std::exception& ex)
+        {
+            derror("%s: invalid prepare request: %s", name(), ex.what());
+            dsn_rpc_reply(dsn_msg_create_response(request), ERR_INVALID_DATA.get());
+            return;
+        }
+        catch (...)
+        {
+            derror("%s: invalid prepare request: unknown exception", name());
+            dsn_rpc_reply(dsn_msg_create_response(request), ERR_INVALID_DATA.get());
+            return;
+        }
     }
 
     decree decree = mu->data.header.decree;
@@ -432,7 +448,33 @@ void replica::on_prepare_reply(std::pair<mutation_ptr, partition_status::type> p
     }
     else
     {
-        ::dsn::unmarshall(reply, resp);
+        auto decode_err = ::dsn::try_unmarshall(reply, resp);
+        if (decode_err != ERR_OK)
+        {
+            derror("%s: mutation %s got invalid prepare reply from %s: %s",
+                   name(),
+                   mu->name(),
+                   node.to_string(),
+                   decode_err.to_string());
+            resp.err = decode_err;
+        }
+    }
+
+    if (resp.err == ERR_OK &&
+        (resp.ballot != get_ballot() || resp.decree != mu->data.header.decree))
+    {
+        derror(
+            "%s: mutation %s got inconsistent prepare reply from %s: "
+            "resp ballot = %" PRId64 ", local ballot = %" PRId64
+            ", resp decree = %" PRId64 ", local decree = %" PRId64,
+            name(),
+            mu->name(),
+            node.to_string(),
+            resp.ballot,
+            get_ballot(),
+            resp.decree,
+            mu->data.header.decree);
+        resp.err = ERR_INVALID_DATA;
     }
 
     if (resp.err == ERR_OK)
@@ -456,9 +498,6 @@ void replica::on_prepare_reply(std::pair<mutation_ptr, partition_status::type> p
 
     if (resp.err == ERR_OK)
     {
-        dassert (resp.ballot == get_ballot(), "");
-        dassert (resp.decree == mu->data.header.decree, "");
-
         switch (targetStatus)
         {
         case partition_status::PS_SECONDARY:

@@ -652,7 +652,14 @@ void replica_stub::on_query_replica_info(const query_replica_info_request& req, 
 void replica_stub::on_prepare(dsn_message_t request)
 {
     gpid gpid;
-    dsn::unmarshall(request, gpid);
+    auto decode_err = dsn::try_unmarshall(request, gpid);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid prepare request: %s", decode_err.to_string());
+        dsn_rpc_reply(dsn_msg_create_response(request), decode_err.get());
+        return;
+    }
+
     replica_ptr rep = get_replica(gpid);
     if (rep != nullptr)
     {
@@ -877,6 +884,18 @@ void replica_stub::on_node_query_reply(error_code err, dsn_message_t request, ds
     }
     else
     {
+        configuration_query_by_node_response resp;
+        auto decode_err = ::dsn::try_unmarshall(response, resp);
+        if (decode_err != ERR_OK)
+        {
+            derror("invalid query node partitions response: %s", decode_err.to_string());
+            if (_state == NS_Connecting)
+            {
+                query_configuration_by_node();
+            }
+            return;
+        }
+
         if (_state == NS_Connecting)
         {
             _state = NS_Connected;
@@ -885,9 +904,6 @@ void replica_stub::on_node_query_reply(error_code err, dsn_message_t request, ds
         // DO NOT UPDATE STATE WHEN DISCONNECTED
         if (_state != NS_Connected)
             return;
-        
-        configuration_query_by_node_response resp;
-        ::dsn::unmarshall(response, resp);
 
         if (resp.err == ERR_BUSY)
         {

@@ -400,8 +400,36 @@ void replica::on_update_configuration_on_meta_server_reply(error_code err, dsn_m
     configuration_update_response resp;
     if (err == ERR_OK)
     {
-        ::dsn::unmarshall(response, resp);
-        err = resp.err;
+        auto decode_err = ::dsn::try_unmarshall(response, resp);
+        if (decode_err != ERR_OK)
+        {
+            derror("%s: invalid update configuration response: %s", name(), decode_err.to_string());
+            err = decode_err;
+        }
+        else
+        {
+            err = resp.err;
+        }
+    }
+
+    if (err == ERR_OK &&
+        (req->config.pid != resp.config.pid || req->config.primary != resp.config.primary ||
+         req->config.secondaries != resp.config.secondaries))
+    {
+        derror(
+            "%s: invalid update configuration response, "
+            "request(pid=%d.%d, primary=%s, secondaries=%zu), "
+            "response(pid=%d.%d, primary=%s, secondaries=%zu)",
+            name(),
+            req->config.pid.get_app_id(),
+            req->config.pid.get_partition_index(),
+            req->config.primary.to_string(),
+            req->config.secondaries.size(),
+            resp.config.pid.get_app_id(),
+            resp.config.pid.get_partition_index(),
+            resp.config.primary.to_string(),
+            resp.config.secondaries.size());
+        err = ERR_INVALID_DATA;
     }
 
     if (err != ERR_OK)
@@ -461,10 +489,6 @@ void replica::on_update_configuration_on_meta_server_reply(error_code err, dsn_m
     // post-update work items?
     if (resp.err == ERR_OK)
     {        
-        dassert (req->config.pid == resp.config.pid, "");
-        dassert (req->config.primary == resp.config.primary, "");
-        dassert (req->config.secondaries == resp.config.secondaries, "");
-
         switch (req->type)
         {        
         case config_type::CT_UPGRADE_TO_PRIMARY:

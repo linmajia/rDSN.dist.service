@@ -562,7 +562,15 @@ void server_state::on_config_sync(dsn_message_t msg)
     configuration_query_by_node_request request;
     configuration_query_by_node_response response;
 
-    dsn::unmarshall(msg, request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid config sync request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
+    }
 
     bool reject_this_request = false;
     {
