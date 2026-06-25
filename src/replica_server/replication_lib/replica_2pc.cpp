@@ -235,7 +235,12 @@ void replica::on_prepare(dsn_message_t request)
 
     dinfo("%s: mutation %s on_prepare", name(), mu->name());
 
-    dassert(mu->data.header.ballot == rconfig.ballot, "");
+    if (mu->data.header.pid != rconfig.pid || mu->data.header.ballot != rconfig.ballot)
+    {
+        derror("%s: invalid prepare request: mutation header does not match replica config", name());
+        dsn_rpc_reply(dsn_msg_create_response(request), ERR_INVALID_DATA.get());
+        return;
+    }
 
     if (mu->data.header.ballot < get_ballot())
     {
@@ -322,18 +327,8 @@ void replica::on_prepare(dsn_message_t request)
         return;
     }
 
-    error_code err = _prepare_list->prepare(mu, status());
-    dassert (err == ERR_OK, "");
-
-    if (partition_status::PS_POTENTIAL_SECONDARY == status())
-    {
-        dassert (mu->data.header.decree <= last_committed_decree() + _options->max_mutation_count_in_prepare_list, "");
-    }
-    else if (partition_status::PS_SECONDARY == status())
-    {
-        dassert (mu->data.header.decree <= last_committed_decree() + _options->staleness_for_commit, "");
-    }
-    else
+    if (partition_status::PS_POTENTIAL_SECONDARY != status() &&
+        partition_status::PS_SECONDARY != status())
     {
         derror(
             "%s: mutation %s on_prepare failed as invalid replica state, state = %s",
@@ -341,6 +336,33 @@ void replica::on_prepare(dsn_message_t request)
             enum_to_string(status())
             );
         ack_prepare_message(ERR_INVALID_STATE, mu);
+        return;
+    }
+
+    if (partition_status::PS_POTENTIAL_SECONDARY == status() &&
+        mu->data.header.decree > last_committed_decree() + _options->max_mutation_count_in_prepare_list)
+    {
+        derror("%s: mutation %s on_prepare failed as decree exceeds prepare-list capacity",
+               name(),
+               mu->name());
+        ack_prepare_message(ERR_INVALID_DATA, mu);
+        return;
+    }
+    else if (partition_status::PS_SECONDARY == status() &&
+             mu->data.header.decree > last_committed_decree() + _options->staleness_for_commit)
+    {
+        derror("%s: mutation %s on_prepare failed as decree exceeds secondary staleness window",
+               name(),
+               mu->name());
+        ack_prepare_message(ERR_INVALID_DATA, mu);
+        return;
+    }
+
+    error_code err = _prepare_list->prepare(mu, status());
+    if (err != ERR_OK)
+    {
+        derror("%s: mutation %s on_prepare failed: %s", name(), mu->name(), err.to_string());
+        ack_prepare_message(ERR_INVALID_DATA, mu);
         return;
     }
 

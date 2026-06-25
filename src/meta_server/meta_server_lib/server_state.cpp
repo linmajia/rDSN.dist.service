@@ -55,6 +55,27 @@ using namespace dsn;
 
 namespace dsn { namespace replication {
 
+static bool is_valid_stateful_partition_config(const partition_configuration& config)
+{
+    if (!config.primary.is_invalid() &&
+        std::find(config.last_drops.begin(), config.last_drops.end(), config.primary) !=
+            config.last_drops.end())
+    {
+        return false;
+    }
+
+    for (const auto& secondary : config.secondaries)
+    {
+        if (std::find(config.last_drops.begin(), config.last_drops.end(), secondary) !=
+            config.last_drops.end())
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 template<typename TResponse>
 static inline void reply_message(meta_service* svc, dsn_message_t request_msg, TResponse&& response_data)
 {
@@ -1226,6 +1247,14 @@ void server_state::on_update_configuration(std::shared_ptr<configuration_update_
         response.config.pid = gpid;
         response.config.primary.set_invalid();
         response.config.secondaries.clear();
+    }
+    else if (app->is_stateful && !is_valid_stateful_partition_config(cfg_request->config))
+    {
+        derror("invalid update configuration request for gpid(%d.%d): member node is in last_drops",
+               gpid.get_app_id(),
+               gpid.get_partition_index());
+        response.err = ERR_INVALID_DATA;
+        response.config = pc;
     }
     else if (app->is_stateful && is_partition_config_equal(pc, cfg_request->config))
     {

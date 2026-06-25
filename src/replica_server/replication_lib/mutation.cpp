@@ -37,6 +37,7 @@
 # include "mutation_log.h"
 # include "replica.h"
 # include <dsn/tool-api/task_spec.h>
+# include <stdexcept>
 
 namespace dsn { namespace replication {
 
@@ -199,8 +200,21 @@ void mutation::write_to(binary_writer& writer, dsn_message_t /*to*/) const
 {
     mutation_ptr mu(new mutation());
     reader.read_pod(mu->data.header);
+    if (mu->data.header.pid.get_app_id() <= 0 ||
+        mu->data.header.pid.get_partition_index() < 0 ||
+        mu->data.header.ballot < 0 ||
+        mu->data.header.decree <= 0 ||
+        mu->data.header.last_committed_decree < 0)
+    {
+        throw std::invalid_argument("invalid mutation header");
+    }
+
     int size;
     reader.read_pod(size);
+    if (size < 0)
+    {
+        throw std::invalid_argument("invalid mutation update count");
+    }
     mu->data.updates.resize(size);
     std::vector<int> lengths(size, 0);
     for (int i = 0; i < size; ++i)
@@ -208,14 +222,25 @@ void mutation::write_to(binary_writer& writer, dsn_message_t /*to*/) const
         std::string name;
         reader.read(name);
         ::dsn::task_code code(dsn_task_code_from_string(name.c_str(), TASK_CODE_INVALID));
-        dassert(code != TASK_CODE_INVALID, "invalid mutation task code: %s", name.c_str());
+        if (code == TASK_CODE_INVALID)
+        {
+            throw std::invalid_argument("invalid mutation task code: " + name);
+        }
         mu->data.updates[i].code = code;
 
         int type;
         reader.read_pod(type);
+        if (type <= DSF_INVALID || type > DSF_JSON)
+        {
+            throw std::invalid_argument("invalid mutation serialization type");
+        }
         mu->data.updates[i].serialization_type = type;
 
         reader.read_pod(lengths[i]);
+        if (lengths[i] < 0)
+        {
+            throw std::invalid_argument("invalid mutation update data length");
+        }
     }
     for (int i = 0; i < size; ++i)
     {
