@@ -758,7 +758,15 @@ void server_state::create_app(dsn_message_t msg)
     configuration_create_app_response response;
     std::shared_ptr<app_state> app;
     bool will_create_app = false;
-    dsn::unmarshall(msg ,request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid create app request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
+    }
     
     ddebug("create app request, name(%s), type(%s)", request.app_name.c_str(), request.options.app_type.c_str());
 
@@ -878,7 +886,15 @@ void server_state::drop_app(dsn_message_t msg)
 
     bool do_dropping = false;
     std::shared_ptr<app_state> app;
-    dsn::unmarshall(msg, request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid drop app request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
+    }
     ddebug("drop app request, name(%s)", request.app_name.c_str());
     {
         zauto_write_lock l(_lock);
@@ -1234,25 +1250,50 @@ void server_state::on_update_configuration(std::shared_ptr<configuration_update_
     zauto_write_lock l(_lock);
     dsn::gpid& gpid = cfg_request->config.pid;
     std::shared_ptr<app_state> app = get_app(gpid.get_app_id());
-    partition_configuration& pc = app->partitions[gpid.get_partition_index()];
-    config_context& cc = app->helpers->contexts[gpid.get_partition_index()];
     configuration_update_response response;
     response.err = ERR_IO_PENDING;
 
-    //table is removed
-    if (app == nullptr || app->status!=app_status::AS_AVAILABLE)
+    //table is removed, or the request references an invalid partition (e.g. corrupted request)
+    if (app == nullptr || app->status!=app_status::AS_AVAILABLE
+        || gpid.get_partition_index() < 0
+        || gpid.get_partition_index() >= app->partition_count)
     {
         response.err = ERR_INVALID_VERSION;
         response.config.ballot = cfg_request->config.ballot+1;
         response.config.pid = gpid;
         response.config.primary.set_invalid();
         response.config.secondaries.clear();
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
     }
-    else if (app->is_stateful && !is_valid_stateful_partition_config(cfg_request->config))
+
+    partition_configuration& pc = app->partitions[gpid.get_partition_index()];
+    config_context& cc = app->helpers->contexts[gpid.get_partition_index()];
+
+    if (app->is_stateful && !is_valid_stateful_partition_config(cfg_request->config))
     {
         derror("invalid update configuration request for gpid(%d.%d): member node is in last_drops",
                gpid.get_app_id(),
                gpid.get_partition_index());
+        response.err = ERR_INVALID_DATA;
+        response.config = pc;
+    }
+    else if (app->is_stateful && _nodes.find(cfg_request->node) == _nodes.end())
+    {
+        derror("invalid update configuration request for gpid(%d.%d): node(%s) is not a known replica node",
+               gpid.get_app_id(),
+               gpid.get_partition_index(),
+               cfg_request->node.to_string());
+        response.err = ERR_INVALID_DATA;
+        response.config = pc;
+    }
+    else if (!app->is_stateful && _nodes.find(cfg_request->host_node) == _nodes.end())
+    {
+        derror("invalid update configuration request for gpid(%d.%d): host_node(%s) is not a known node",
+               gpid.get_app_id(),
+               gpid.get_partition_index(),
+               cfg_request->host_node.to_string());
         response.err = ERR_INVALID_DATA;
         response.config = pc;
     }

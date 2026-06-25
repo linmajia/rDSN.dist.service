@@ -714,7 +714,15 @@ void replica_stub::on_group_check(const group_check_request& request, /*out*/ gr
 void replica_stub::on_learn(dsn_message_t msg)
 {
     learn_request request;
-    ::dsn::unmarshall(msg, request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid learn request: %s", decode_err.to_string());
+        learn_response response;
+        response.err = decode_err;
+        reply(msg, response);
+        return;
+    }
 
     replica_ptr rep = get_replica(request.pid);
     if (rep != nullptr)

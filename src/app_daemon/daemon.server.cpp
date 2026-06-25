@@ -338,7 +338,11 @@ namespace dsn
                     return;
 
                 configuration_query_by_node_response resp;
-                ::dsn::unmarshall(response, resp);
+                if (::dsn::try_unmarshall(response, resp) != ERR_OK)
+                {
+                    derror("invalid config query by node response: failed to decode");
+                    return;
+                }
 
                 if (resp.err != ERR_OK || resp.err == ERR_BUSY)
                     return;
@@ -1250,7 +1254,11 @@ namespace dsn
             configuration_update_response resp;
             if (err == ERR_OK)
             {
-                ::dsn::unmarshall(response, resp);
+                if (::dsn::try_unmarshall(response, resp) != ERR_OK)
+                {
+                    derror("invalid update configuration response: failed to decode");
+                    return;
+                }
                 if (resp.config.ballot <= app->configuration.ballot)
                     return;
 
