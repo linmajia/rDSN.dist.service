@@ -230,7 +230,7 @@ void mutation::write_to(binary_writer& writer, dsn_message_t /*to*/) const
 
         int type;
         reader.read_pod(type);
-        if (type <= DSF_INVALID || type > DSF_JSON)
+        if (type < DSF_INVALID || type > DSF_JSON)
         {
             throw std::invalid_argument("invalid mutation serialization type");
         }
