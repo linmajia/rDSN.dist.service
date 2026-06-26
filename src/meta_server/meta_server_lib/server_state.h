@@ -116,7 +116,7 @@ private:
     void on_update_configuration_on_remote_reply(error_code ec, std::shared_ptr<configuration_update_request>& request);
     void update_configuration_locally(app_state& app, std::shared_ptr<configuration_update_request>& config_request);
     void apply_migration_actions(migration_list& ml);
-    void request_check(const partition_configuration& old, const configuration_update_request& request);
+    bool request_check(const partition_configuration& old, const configuration_update_request& request);
     void downgrade_primary_to_inactive(std::shared_ptr<app_state>& app, int pidx);
     void downgrade_secondary_to_inactive(std::shared_ptr<app_state>& app, int pidx, const rpc_address& node);
     void downgrade_stateless_nodes(std::shared_ptr<app_state>& app, int pidx, const rpc_address& address);

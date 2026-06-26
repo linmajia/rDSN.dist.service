@@ -981,37 +981,33 @@ void server_state::send_proposal(const configuration_proposal_action &action, co
     send_proposal(action.target, request);
 }
 
-void server_state::request_check(const partition_configuration &old, const configuration_update_request& request)
+bool server_state::request_check(const partition_configuration &old, const configuration_update_request& request)
 {
     const partition_configuration& new_config = request.config;
+    const bool node_is_primary = old.primary == request.node;
+    const bool node_is_secondary =
+        std::find(old.secondaries.begin(), old.secondaries.end(), request.node) !=
+        old.secondaries.end();
 
     switch (request.type) {
     case config_type::CT_ASSIGN_PRIMARY:
-        dassert(old.primary != request.node, "");
-        dassert(std::find(old.secondaries.begin(), old.secondaries.end(), request.node) == old.secondaries.end(), "");
-        break;
+        return !node_is_primary && !node_is_secondary;
     case config_type::CT_UPGRADE_TO_PRIMARY:
-        dassert(old.primary != request.node, "");
-        dassert(std::find(old.secondaries.begin(), old.secondaries.end(), request.node) != old.secondaries.end(), "");
-        break;
+        return !node_is_primary && node_is_secondary;
     case config_type::CT_DOWNGRADE_TO_SECONDARY:
-        dassert(old.primary == request.node, "");
-        dassert(std::find(old.secondaries.begin(), old.secondaries.end(), request.node) == old.secondaries.end(), "");
-        break;
+        return node_is_primary && !node_is_secondary;
     case config_type::CT_DOWNGRADE_TO_INACTIVE:
     case config_type::CT_REMOVE:
-        dassert(old.primary == request.node || std::find(old.secondaries.begin(), old.secondaries.end(), request.node) != old.secondaries.end(), "");
-        break;
+        return node_is_primary || node_is_secondary;
     case config_type::CT_UPGRADE_TO_SECONDARY:
-        dassert(old.primary != request.node, "");
-        dassert(std::find(old.secondaries.begin(), old.secondaries.end(), request.node) == old.secondaries.end(), "");
-        break;
+        return !node_is_primary && !node_is_secondary;
     case config_type::CT_PRIMARY_FORCE_UPDATE_BALLOT:
-        dassert(old.primary==new_config.primary, "");
-        dassert(old.secondaries==new_config.secondaries, "");
-        break;
+        return old.primary == new_config.primary && old.secondaries == new_config.secondaries;
+    case config_type::CT_ADD_SECONDARY:
+    case config_type::CT_ADD_SECONDARY_FOR_LB:
+        return false;
     default:
-        break;
+        return false;
     }
 }
 
@@ -1031,9 +1027,6 @@ void server_state::update_configuration_locally(app_state& app, std::shared_ptr<
         dassert(iter != _nodes.end(), "");
         node_state& ns = iter->second;
 
-    #ifndef NDEBUG
-        request_check(old_cfg, *config_request);
-    #endif
         switch (config_request->type) {
         case config_type::CT_ASSIGN_PRIMARY:
         case config_type::CT_UPGRADE_TO_PRIMARY:
@@ -1332,6 +1325,16 @@ void server_state::on_update_configuration(std::shared_ptr<configuration_update_
         ddebug("update configuration for gpid(%d.%d) reject coz ballot not match, request ballot: %" PRId64 ", meta ballot: %" PRId64 "",
             gpid.get_app_id(), gpid.get_partition_index(), cfg_request->config.ballot, pc.ballot);
         response.err = ERR_INVALID_VERSION;
+        response.config = pc;
+    }
+    else if (app->is_stateful && !request_check(pc, *cfg_request))
+    {
+        derror("invalid update configuration request for gpid(%d.%d): type = %s, node = %s",
+               gpid.get_app_id(),
+               gpid.get_partition_index(),
+               enum_to_string(cfg_request->type),
+               cfg_request->node.to_string());
+        response.err = ERR_INVALID_DATA;
         response.config = pc;
     }
     else // ok
