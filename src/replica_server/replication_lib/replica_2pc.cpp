@@ -231,7 +231,7 @@ void replica::on_prepare(dsn_message_t request)
         }
     }
 
-    decree decree = mu->data.header.decree;
+    decree mutation_decree = mu->data.header.decree;
 
     dinfo("%s: mutation %s on_prepare", name(), mu->name());
 
@@ -303,14 +303,14 @@ void replica::on_prepare(dsn_message_t request)
     }
 
     dassert (rconfig.status == status(), "");    
-    if (decree <= last_committed_decree())
+    if (mutation_decree <= last_committed_decree())
     {
         ack_prepare_message(ERR_OK, mu);
         return;
     }
     
     // real prepare start
-    auto mu2 = _prepare_list->get_mutation_by_decree(decree);
+    auto mu2 = _prepare_list->get_mutation_by_decree(mutation_decree);
     if (mu2 != nullptr && mu2->data.header.ballot == mu->data.header.ballot)
     {
         if (mu2->is_logged())
@@ -339,8 +339,24 @@ void replica::on_prepare(dsn_message_t request)
         return;
     }
 
+    if (mu->data.header.last_committed_decree >= mutation_decree)
+    {
+        derror("%s: mutation %s on_prepare failed as invalid last committed decree",
+               name(),
+               mu->name());
+        ack_prepare_message(ERR_INVALID_DATA, mu);
+        return;
+    }
+
+    decree committed_decree_after_prepare = last_committed_decree();
+    if (mu->data.header.last_committed_decree > committed_decree_after_prepare)
+    {
+        committed_decree_after_prepare = mu->data.header.last_committed_decree;
+    }
+
     if (partition_status::PS_POTENTIAL_SECONDARY == status() &&
-        mu->data.header.decree > last_committed_decree() + _options->max_mutation_count_in_prepare_list)
+        mutation_decree - committed_decree_after_prepare >
+            _options->max_mutation_count_in_prepare_list)
     {
         derror("%s: mutation %s on_prepare failed as decree exceeds prepare-list capacity",
                name(),
@@ -349,7 +365,7 @@ void replica::on_prepare(dsn_message_t request)
         return;
     }
     else if (partition_status::PS_SECONDARY == status() &&
-             mu->data.header.decree > last_committed_decree() + _options->staleness_for_commit)
+             mutation_decree - committed_decree_after_prepare > _options->staleness_for_commit)
     {
         derror("%s: mutation %s on_prepare failed as decree exceeds secondary staleness window",
                name(),

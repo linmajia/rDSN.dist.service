@@ -55,11 +55,23 @@ using namespace dsn;
 
 namespace dsn { namespace replication {
 
-static bool is_valid_stateful_partition_config(const partition_configuration& config)
+static bool is_node_being_restored(config_type::type type,
+                                   const rpc_address& request_node,
+                                   const rpc_address& member_node)
 {
+    return request_node == member_node &&
+           (type == config_type::CT_ASSIGN_PRIMARY ||
+            type == config_type::CT_UPGRADE_TO_PRIMARY ||
+            type == config_type::CT_UPGRADE_TO_SECONDARY);
+}
+
+static bool is_valid_stateful_partition_config(const configuration_update_request& request)
+{
+    const partition_configuration& config = request.config;
     if (!config.primary.is_invalid() &&
         std::find(config.last_drops.begin(), config.last_drops.end(), config.primary) !=
-            config.last_drops.end())
+            config.last_drops.end() &&
+        !is_node_being_restored(request.type, request.node, config.primary))
     {
         return false;
     }
@@ -67,7 +79,8 @@ static bool is_valid_stateful_partition_config(const partition_configuration& co
     for (const auto& secondary : config.secondaries)
     {
         if (std::find(config.last_drops.begin(), config.last_drops.end(), secondary) !=
-            config.last_drops.end())
+            config.last_drops.end() &&
+            !is_node_being_restored(request.type, request.node, secondary))
         {
             return false;
         }
@@ -1271,7 +1284,7 @@ void server_state::on_update_configuration(std::shared_ptr<configuration_update_
     partition_configuration& pc = app->partitions[gpid.get_partition_index()];
     config_context& cc = app->helpers->contexts[gpid.get_partition_index()];
 
-    if (app->is_stateful && !is_valid_stateful_partition_config(cfg_request->config))
+    if (app->is_stateful && !is_valid_stateful_partition_config(*cfg_request))
     {
         derror("invalid update configuration request for gpid(%d.%d): member node is in last_drops",
                gpid.get_app_id(),
