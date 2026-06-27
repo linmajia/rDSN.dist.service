@@ -55,6 +55,40 @@ using namespace dsn;
 
 namespace dsn { namespace replication {
 
+static bool is_node_being_restored(config_type::type type,
+                                   const rpc_address& request_node,
+                                   const rpc_address& member_node)
+{
+    return request_node == member_node &&
+           (type == config_type::CT_ASSIGN_PRIMARY ||
+            type == config_type::CT_UPGRADE_TO_PRIMARY ||
+            type == config_type::CT_UPGRADE_TO_SECONDARY);
+}
+
+static bool is_valid_stateful_partition_config(const configuration_update_request& request)
+{
+    const partition_configuration& config = request.config;
+    if (!config.primary.is_invalid() &&
+        std::find(config.last_drops.begin(), config.last_drops.end(), config.primary) !=
+            config.last_drops.end() &&
+        !is_node_being_restored(request.type, request.node, config.primary))
+    {
+        return false;
+    }
+
+    for (const auto& secondary : config.secondaries)
+    {
+        if (std::find(config.last_drops.begin(), config.last_drops.end(), secondary) !=
+            config.last_drops.end() &&
+            !is_node_being_restored(request.type, request.node, secondary))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 template<typename TResponse>
 static inline void reply_message(meta_service* svc, dsn_message_t request_msg, TResponse&& response_data)
 {
@@ -562,7 +596,15 @@ void server_state::on_config_sync(dsn_message_t msg)
     configuration_query_by_node_request request;
     configuration_query_by_node_response response;
 
-    dsn::unmarshall(msg, request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid config sync request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
+    }
 
     bool reject_this_request = false;
     {
@@ -729,7 +771,15 @@ void server_state::create_app(dsn_message_t msg)
     configuration_create_app_response response;
     std::shared_ptr<app_state> app;
     bool will_create_app = false;
-    dsn::unmarshall(msg ,request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid create app request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
+    }
     
     ddebug("create app request, name(%s), type(%s)", request.app_name.c_str(), request.options.app_type.c_str());
 
@@ -849,7 +899,15 @@ void server_state::drop_app(dsn_message_t msg)
 
     bool do_dropping = false;
     std::shared_ptr<app_state> app;
-    dsn::unmarshall(msg, request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid drop app request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
+    }
     ddebug("drop app request, name(%s)", request.app_name.c_str());
     {
         zauto_write_lock l(_lock);
@@ -923,37 +981,33 @@ void server_state::send_proposal(const configuration_proposal_action &action, co
     send_proposal(action.target, request);
 }
 
-void server_state::request_check(const partition_configuration &old, const configuration_update_request& request)
+bool server_state::request_check(const partition_configuration &old, const configuration_update_request& request)
 {
     const partition_configuration& new_config = request.config;
+    const bool node_is_primary = old.primary == request.node;
+    const bool node_is_secondary =
+        std::find(old.secondaries.begin(), old.secondaries.end(), request.node) !=
+        old.secondaries.end();
 
     switch (request.type) {
     case config_type::CT_ASSIGN_PRIMARY:
-        dassert(old.primary != request.node, "");
-        dassert(std::find(old.secondaries.begin(), old.secondaries.end(), request.node) == old.secondaries.end(), "");
-        break;
+        return !node_is_primary && !node_is_secondary;
     case config_type::CT_UPGRADE_TO_PRIMARY:
-        dassert(old.primary != request.node, "");
-        dassert(std::find(old.secondaries.begin(), old.secondaries.end(), request.node) != old.secondaries.end(), "");
-        break;
+        return !node_is_primary && node_is_secondary;
     case config_type::CT_DOWNGRADE_TO_SECONDARY:
-        dassert(old.primary == request.node, "");
-        dassert(std::find(old.secondaries.begin(), old.secondaries.end(), request.node) == old.secondaries.end(), "");
-        break;
+        return node_is_primary && !node_is_secondary;
     case config_type::CT_DOWNGRADE_TO_INACTIVE:
     case config_type::CT_REMOVE:
-        dassert(old.primary == request.node || std::find(old.secondaries.begin(), old.secondaries.end(), request.node) != old.secondaries.end(), "");
-        break;
+        return node_is_primary || node_is_secondary;
     case config_type::CT_UPGRADE_TO_SECONDARY:
-        dassert(old.primary != request.node, "");
-        dassert(std::find(old.secondaries.begin(), old.secondaries.end(), request.node) == old.secondaries.end(), "");
-        break;
+        return !node_is_primary && !node_is_secondary;
     case config_type::CT_PRIMARY_FORCE_UPDATE_BALLOT:
-        dassert(old.primary==new_config.primary, "");
-        dassert(old.secondaries==new_config.secondaries, "");
-        break;
+        return old.primary == new_config.primary && old.secondaries == new_config.secondaries;
+    case config_type::CT_ADD_SECONDARY:
+    case config_type::CT_ADD_SECONDARY_FOR_LB:
+        return false;
     default:
-        break;
+        return false;
     }
 }
 
@@ -973,9 +1027,6 @@ void server_state::update_configuration_locally(app_state& app, std::shared_ptr<
         dassert(iter != _nodes.end(), "");
         node_state& ns = iter->second;
 
-    #ifndef NDEBUG
-        request_check(old_cfg, *config_request);
-    #endif
         switch (config_request->type) {
         case config_type::CT_ASSIGN_PRIMARY:
         case config_type::CT_UPGRADE_TO_PRIMARY:
@@ -1205,19 +1256,52 @@ void server_state::on_update_configuration(std::shared_ptr<configuration_update_
     zauto_write_lock l(_lock);
     dsn::gpid& gpid = cfg_request->config.pid;
     std::shared_ptr<app_state> app = get_app(gpid.get_app_id());
-    partition_configuration& pc = app->partitions[gpid.get_partition_index()];
-    config_context& cc = app->helpers->contexts[gpid.get_partition_index()];
     configuration_update_response response;
     response.err = ERR_IO_PENDING;
 
-    //table is removed
-    if (app == nullptr || app->status!=app_status::AS_AVAILABLE)
+    //table is removed, or the request references an invalid partition (e.g. corrupted request)
+    if (app == nullptr || app->status!=app_status::AS_AVAILABLE
+        || gpid.get_partition_index() < 0
+        || gpid.get_partition_index() >= app->partition_count)
     {
         response.err = ERR_INVALID_VERSION;
         response.config.ballot = cfg_request->config.ballot+1;
         response.config.pid = gpid;
         response.config.primary.set_invalid();
         response.config.secondaries.clear();
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
+    }
+
+    partition_configuration& pc = app->partitions[gpid.get_partition_index()];
+    config_context& cc = app->helpers->contexts[gpid.get_partition_index()];
+
+    if (app->is_stateful && !is_valid_stateful_partition_config(*cfg_request))
+    {
+        derror("invalid update configuration request for gpid(%d.%d): member node is in last_drops",
+               gpid.get_app_id(),
+               gpid.get_partition_index());
+        response.err = ERR_INVALID_DATA;
+        response.config = pc;
+    }
+    else if (app->is_stateful && _nodes.find(cfg_request->node) == _nodes.end())
+    {
+        derror("invalid update configuration request for gpid(%d.%d): node(%s) is not a known replica node",
+               gpid.get_app_id(),
+               gpid.get_partition_index(),
+               cfg_request->node.to_string());
+        response.err = ERR_INVALID_DATA;
+        response.config = pc;
+    }
+    else if (!app->is_stateful && _nodes.find(cfg_request->host_node) == _nodes.end())
+    {
+        derror("invalid update configuration request for gpid(%d.%d): host_node(%s) is not a known node",
+               gpid.get_app_id(),
+               gpid.get_partition_index(),
+               cfg_request->host_node.to_string());
+        response.err = ERR_INVALID_DATA;
+        response.config = pc;
     }
     else if (app->is_stateful && is_partition_config_equal(pc, cfg_request->config))
     {
@@ -1241,6 +1325,16 @@ void server_state::on_update_configuration(std::shared_ptr<configuration_update_
         ddebug("update configuration for gpid(%d.%d) reject coz ballot not match, request ballot: %" PRId64 ", meta ballot: %" PRId64 "",
             gpid.get_app_id(), gpid.get_partition_index(), cfg_request->config.ballot, pc.ballot);
         response.err = ERR_INVALID_VERSION;
+        response.config = pc;
+    }
+    else if (app->is_stateful && !request_check(pc, *cfg_request))
+    {
+        derror("invalid update configuration request for gpid(%d.%d): type = %s, node = %s",
+               gpid.get_app_id(),
+               gpid.get_partition_index(),
+               enum_to_string(cfg_request->type),
+               cfg_request->node.to_string());
+        response.err = ERR_INVALID_DATA;
         response.config = pc;
     }
     else // ok

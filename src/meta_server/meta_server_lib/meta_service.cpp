@@ -361,7 +361,14 @@ void meta_service::on_list_apps(dsn_message_t req)
     RPC_CHECK_STATUS(req, response);
 
     configuration_list_apps_request request;
-    ::dsn::unmarshall(req, request);
+    auto decode_err = dsn::try_unmarshall(req, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid list apps request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(req, response);
+        return;
+    }
     _state->list_apps(request, response);
     reply(req, response);
 }
@@ -372,7 +379,14 @@ void meta_service::on_list_nodes(dsn_message_t req)
     RPC_CHECK_STATUS(req, response);
 
     configuration_list_nodes_request request;
-    dsn::unmarshall(req, request);
+    auto decode_err = dsn::try_unmarshall(req, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid list nodes request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(req, response);
+        return;
+    }
 
     {
         zauto_read_lock l(_meta_lock);
@@ -405,7 +419,14 @@ void meta_service::on_query_cluster_info(dsn_message_t req)
     RPC_CHECK_STATUS(req, response);
 
     configuration_cluster_info_request request;
-    dsn::unmarshall(req, request);
+    auto decode_err = dsn::try_unmarshall(req, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid query cluster info request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(req, response);
+        return;
+    }
 
     std::stringstream oss;
     response.keys.push_back("meta_servers");
@@ -432,7 +453,15 @@ void meta_service::on_query_configuration_by_node(dsn_message_t msg)
     RPC_CHECK_STATUS(msg, response);
 
     configuration_query_by_node_request request;
-    dsn::unmarshall(msg, request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid query configuration by node request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(msg, response);
+        return;
+    }
+
     _state->query_configuration_by_node(request, response);
     reply(msg, response);    
 }
@@ -443,7 +472,15 @@ void meta_service::on_query_configuration_by_index(dsn_message_t msg)
     RPC_CHECK_STATUS(msg, response);
 
     configuration_query_by_index_request request;
-    dsn::unmarshall(msg, request);
+    auto decode_err = dsn::try_unmarshall(msg, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid query configuration by index request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(msg, response);
+        return;
+    }
+
     _state->query_configuration_by_index(request, response);
     reply(msg, response);
 }
@@ -476,7 +513,14 @@ void meta_service::on_update_configuration(dsn_message_t req)
     RPC_CHECK_STATUS(req, response);
 
     std::shared_ptr<configuration_update_request> request = std::make_shared<configuration_update_request>();
-    dsn::unmarshall(req, *request);
+    auto decode_err = dsn::try_unmarshall(req, *request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid update configuration request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(req, response);
+        return;
+    }
 
     if (is_service_freezed())
     {
@@ -500,7 +544,14 @@ void meta_service::on_control_meta(dsn_message_t req)
     configuration_balancer_response response;
     RPC_CHECK_STATUS(req, response);
 
-    dsn::unmarshall(req, request);
+    auto decode_err = dsn::try_unmarshall(req, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid control meta request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(req, response);
+        return;
+    }
     ddebug("get control meta rpc, flags(%lx), type(%d), current flags(%lx)", request.ctrl_flags, request.ctrl_type, _meta_ctrl_flags);
     {
         zauto_write_lock l(_meta_lock);
@@ -537,7 +588,14 @@ void meta_service::on_propose_balancer(dsn_message_t req)
     configuration_balancer_response response;
     RPC_CHECK_STATUS(req, response);
 
-    dsn::unmarshall(req, request);
+    auto decode_err = dsn::try_unmarshall(req, request);
+    if (decode_err != ERR_OK)
+    {
+        derror("invalid propose balancer request: %s", decode_err.to_string());
+        response.err = decode_err;
+        reply(req, response);
+        return;
+    }
     ddebug("get proposal balancer request, gpid(%d.%d)", request.gpid.get_app_id(), request.gpid.get_partition_index());
     _state->on_propose_balancer(request, response);
     reply(req, response);

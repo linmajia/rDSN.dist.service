@@ -46,6 +46,19 @@
 
 namespace dsn { namespace replication {
 
+namespace {
+
+bool is_valid_partition_status(partition_status::type status)
+{
+    return status == partition_status::PS_INACTIVE ||
+           status == partition_status::PS_ERROR ||
+           status == partition_status::PS_PRIMARY ||
+           status == partition_status::PS_SECONDARY ||
+           status == partition_status::PS_POTENTIAL_SECONDARY;
+}
+
+} // anonymous namespace
+
 void replica::on_config_proposal(configuration_update_request& proposal)
 {
     check_hashed_access();
@@ -400,8 +413,36 @@ void replica::on_update_configuration_on_meta_server_reply(error_code err, dsn_m
     configuration_update_response resp;
     if (err == ERR_OK)
     {
-        ::dsn::unmarshall(response, resp);
-        err = resp.err;
+        auto decode_err = ::dsn::try_unmarshall(response, resp);
+        if (decode_err != ERR_OK)
+        {
+            derror("%s: invalid update configuration response: %s", name(), decode_err.to_string());
+            err = decode_err;
+        }
+        else
+        {
+            err = resp.err;
+        }
+    }
+
+    if (err == ERR_OK &&
+        (req->config.pid != resp.config.pid || req->config.primary != resp.config.primary ||
+         req->config.secondaries != resp.config.secondaries))
+    {
+        derror(
+            "%s: invalid update configuration response, "
+            "request(pid=%d.%d, primary=%s, secondaries=%zu), "
+            "response(pid=%d.%d, primary=%s, secondaries=%zu)",
+            name(),
+            req->config.pid.get_app_id(),
+            req->config.pid.get_partition_index(),
+            req->config.primary.to_string(),
+            req->config.secondaries.size(),
+            resp.config.pid.get_app_id(),
+            resp.config.pid.get_partition_index(),
+            resp.config.primary.to_string(),
+            resp.config.secondaries.size());
+        err = ERR_INVALID_DATA;
     }
 
     if (err != ERR_OK)
@@ -461,10 +502,6 @@ void replica::on_update_configuration_on_meta_server_reply(error_code err, dsn_m
     // post-update work items?
     if (resp.err == ERR_OK)
     {        
-        dassert (req->config.pid == resp.config.pid, "");
-        dassert (req->config.primary == resp.config.primary, "");
-        dassert (req->config.secondaries == resp.config.secondaries, "");
-
         switch (req->type)
         {        
         case config_type::CT_UPGRADE_TO_PRIMARY:
@@ -500,8 +537,24 @@ void replica::on_update_configuration_on_meta_server_reply(error_code err, dsn_m
 
 bool replica::update_configuration(const partition_configuration& config)
 {
-    dassert (config.ballot >= get_ballot(), "");
-    
+    if (config.pid != get_gpid())
+    {
+        derror("%s: reject invalid configuration update: pid = %d.%d",
+               name(),
+               config.pid.get_app_id(),
+               config.pid.get_partition_index());
+        return false;
+    }
+
+    if (config.ballot < get_ballot())
+    {
+        derror("%s: reject outdated configuration update: ballot = %" PRId64 ", local ballot = %" PRId64,
+              name(),
+              config.ballot,
+              get_ballot());
+        return false;
+    }
+
     replica_configuration rconfig;
     replica_helper::get_replica_config(config, _stub->_primary_address, rconfig);
 
@@ -544,9 +597,33 @@ bool replica::is_same_ballot_status_change_allowed(partition_status::type olds, 
 
 bool replica::update_local_configuration(const replica_configuration& config, bool same_ballot/* = false*/)
 {
-    dassert(config.ballot > get_ballot()
-        || (same_ballot && config.ballot == get_ballot()), "");
-    dassert (config.pid == get_gpid(), "");
+    if (config.pid != get_gpid())
+    {
+        derror("%s: reject invalid local configuration update: pid = %d.%d",
+               name(),
+               config.pid.get_app_id(),
+               config.pid.get_partition_index());
+        return false;
+    }
+
+    if (config.ballot < get_ballot() || (!same_ballot && config.ballot == get_ballot()))
+    {
+        derror("%s: reject invalid local configuration update: ballot = %" PRId64
+              ", local ballot = %" PRId64 ", same_ballot = %s",
+              name(),
+              config.ballot,
+              get_ballot(),
+              same_ballot ? "true" : "false");
+        return false;
+    }
+
+    if (!is_valid_partition_status(config.status))
+    {
+        derror("%s: reject invalid local configuration update: status = %s",
+               name(),
+               enum_to_string(config.status));
+        return false;
+    }
 
     partition_status::type old_status = status();
     ballot old_ballot = get_ballot();

@@ -99,7 +99,12 @@ dsn::error_code replication_ddl_client::create_app(const std::string& app_name, 
     }
 
     dsn::replication::configuration_create_app_response resp;
-    ::dsn::unmarshall(resp_task->response(), resp);
+    auto decode_err = ::dsn::try_unmarshall(resp_task->response(), resp);
+    if (decode_err != dsn::ERR_OK)
+    {
+        std::cout << "create app " << app_name << " failed: [create] invalid server response: " << decode_err.to_string() << std::endl;
+        return decode_err;
+    }
     if(resp.err != dsn::ERR_OK)
     {
         std::cout << "create app " << app_name << " failed: [create] received server error: " << resp.err.to_string() << std::endl;
@@ -134,7 +139,12 @@ dsn::error_code replication_ddl_client::create_app(const std::string& app_name, 
         }
 
         dsn::configuration_query_by_index_response query_resp;
-        ::dsn::unmarshall(query_task->response(), query_resp);
+        auto query_decode_err = ::dsn::try_unmarshall(query_task->response(), query_resp);
+        if (query_decode_err != dsn::ERR_OK)
+        {
+            std::cout << "create app " << app_name << " failed: [query] invalid server response: " << query_decode_err.to_string() << std::endl;
+            return query_decode_err;
+        }
         if(query_resp.err != dsn::ERR_OK)
         {
             std::cout << "create app " << app_name << " failed: [query] received server error: " << query_resp.err.to_string() << std::endl;
@@ -181,7 +191,9 @@ dsn::error_code replication_ddl_client::drop_app(const std::string& app_name)
     }
 
     dsn::replication::configuration_drop_app_response resp;
-    ::dsn::unmarshall(resp_task->response(), resp);
+    auto decode_err = ::dsn::try_unmarshall(resp_task->response(), resp);
+    if (decode_err != dsn::ERR_OK)
+        return decode_err;
     if(resp.err != dsn::ERR_OK)
     {
         return resp.err;
@@ -205,7 +217,9 @@ dsn::error_code replication_ddl_client::list_apps(const dsn::app_status::type st
     }
 
     dsn::replication::configuration_list_apps_response resp;
-    ::dsn::unmarshall(resp_task->response(), resp);
+    auto decode_err = ::dsn::try_unmarshall(resp_task->response(), resp);
+    if (decode_err != dsn::ERR_OK)
+        return decode_err;
     if(resp.err != dsn::ERR_OK)
     {
         return resp.err;
@@ -263,7 +277,9 @@ dsn::error_code replication_ddl_client::list_nodes(const dsn::replication::node_
     }
 
     dsn::replication::configuration_list_nodes_response resp;
-    ::dsn::unmarshall(resp_task->response(), resp);
+    auto decode_err = ::dsn::try_unmarshall(resp_task->response(), resp);
+    if (decode_err != dsn::ERR_OK)
+        return decode_err;
     if(resp.err != dsn::ERR_OK)
     {
         return resp.err;
@@ -318,7 +334,9 @@ dsn::error_code replication_ddl_client::cluster_info(const std::string& file_nam
     }
 
     configuration_cluster_info_response resp;
-    ::dsn::unmarshall(resp_task->response(), resp);
+    auto decode_err = ::dsn::try_unmarshall(resp_task->response(), resp);
+    if (decode_err != dsn::ERR_OK)
+        return decode_err;
     if(resp.err != dsn::ERR_OK)
     {
         return resp.err;
@@ -456,7 +474,9 @@ dsn::error_code replication_ddl_client::list_app(const std::string& app_name,
     }
 
     dsn::configuration_query_by_index_response resp;
-    dsn::unmarshall(resp_task->response(), resp);
+    auto decode_err = dsn::try_unmarshall(resp_task->response(), resp);
+    if (decode_err != dsn::ERR_OK)
+        return decode_err;
     if(resp.err != dsn::ERR_OK)
     {
         return resp.err;
@@ -490,7 +510,9 @@ dsn::error_code replication_ddl_client::control_meta_balancer_migration(bool sta
     if ( response_task->error() != dsn::ERR_OK)
         return response_task->error();
     configuration_meta_control_response resp;
-    dsn::unmarshall(response_task->response(), resp);
+    auto decode_err = dsn::try_unmarshall(response_task->response(), resp);
+    if (decode_err != dsn::ERR_OK)
+        return decode_err;
     return resp.err;
 }
 
@@ -505,7 +527,9 @@ dsn::error_code replication_ddl_client::send_balancer_proposal(const configurati
     if ( response_task->error() != dsn::ERR_OK)
         return response_task->error();
     dsn::replication::configuration_balancer_response resp;
-    dsn::unmarshall(response_task->response(), resp);
+    auto decode_err = dsn::try_unmarshall(response_task->response(), resp);
+    if (decode_err != dsn::ERR_OK)
+        return decode_err;
     return resp.err;
 }
 

@@ -38,6 +38,7 @@
 #include "mutation_log.h"
 #include "replica_stub.h"
 #include "replication_app_base.h"
+#include <exception>
 
 # ifdef __TITLE__
 # undef __TITLE__
@@ -210,16 +211,36 @@ void replica::on_prepare(dsn_message_t request)
     mutation_ptr mu;
 
     {
-        rpc_read_stream reader(request);
-        unmarshall(reader, rconfig, DSF_THRIFT_BINARY);
-        mu = mutation::read_from(reader, request);
+        try
+        {
+            rpc_read_stream reader(request);
+            unmarshall(reader, rconfig, DSF_THRIFT_BINARY);
+            mu = mutation::read_from(reader, request);
+        }
+        catch (const std::exception& ex)
+        {
+            derror("%s: invalid prepare request: %s", name(), ex.what());
+            dsn_rpc_reply(dsn_msg_create_response(request), ERR_INVALID_DATA.get());
+            return;
+        }
+        catch (...)
+        {
+            derror("%s: invalid prepare request: unknown exception", name());
+            dsn_rpc_reply(dsn_msg_create_response(request), ERR_INVALID_DATA.get());
+            return;
+        }
     }
 
-    decree decree = mu->data.header.decree;
+    decree mutation_decree = mu->data.header.decree;
 
     dinfo("%s: mutation %s on_prepare", name(), mu->name());
 
-    dassert(mu->data.header.ballot == rconfig.ballot, "");
+    if (mu->data.header.pid != rconfig.pid || mu->data.header.ballot != rconfig.ballot)
+    {
+        derror("%s: invalid prepare request: mutation header does not match replica config", name());
+        dsn_rpc_reply(dsn_msg_create_response(request), ERR_INVALID_DATA.get());
+        return;
+    }
 
     if (mu->data.header.ballot < get_ballot())
     {
@@ -282,14 +303,14 @@ void replica::on_prepare(dsn_message_t request)
     }
 
     dassert (rconfig.status == status(), "");    
-    if (decree <= last_committed_decree())
+    if (mutation_decree <= last_committed_decree())
     {
         ack_prepare_message(ERR_OK, mu);
         return;
     }
     
     // real prepare start
-    auto mu2 = _prepare_list->get_mutation_by_decree(decree);
+    auto mu2 = _prepare_list->get_mutation_by_decree(mutation_decree);
     if (mu2 != nullptr && mu2->data.header.ballot == mu->data.header.ballot)
     {
         if (mu2->is_logged())
@@ -306,18 +327,8 @@ void replica::on_prepare(dsn_message_t request)
         return;
     }
 
-    error_code err = _prepare_list->prepare(mu, status());
-    dassert (err == ERR_OK, "");
-
-    if (partition_status::PS_POTENTIAL_SECONDARY == status())
-    {
-        dassert (mu->data.header.decree <= last_committed_decree() + _options->max_mutation_count_in_prepare_list, "");
-    }
-    else if (partition_status::PS_SECONDARY == status())
-    {
-        dassert (mu->data.header.decree <= last_committed_decree() + _options->staleness_for_commit, "");
-    }
-    else
+    if (partition_status::PS_POTENTIAL_SECONDARY != status() &&
+        partition_status::PS_SECONDARY != status())
     {
         derror(
             "%s: mutation %s on_prepare failed as invalid replica state, state = %s",
@@ -325,6 +336,49 @@ void replica::on_prepare(dsn_message_t request)
             enum_to_string(status())
             );
         ack_prepare_message(ERR_INVALID_STATE, mu);
+        return;
+    }
+
+    if (mu->data.header.last_committed_decree >= mutation_decree)
+    {
+        derror("%s: mutation %s on_prepare failed as invalid last committed decree",
+               name(),
+               mu->name());
+        ack_prepare_message(ERR_INVALID_DATA, mu);
+        return;
+    }
+
+    decree committed_decree_after_prepare = last_committed_decree();
+    if (mu->data.header.last_committed_decree > committed_decree_after_prepare)
+    {
+        committed_decree_after_prepare = mu->data.header.last_committed_decree;
+    }
+
+    if (partition_status::PS_POTENTIAL_SECONDARY == status() &&
+        mutation_decree - committed_decree_after_prepare >
+            _options->max_mutation_count_in_prepare_list)
+    {
+        derror("%s: mutation %s on_prepare failed as decree exceeds prepare-list capacity",
+               name(),
+               mu->name());
+        ack_prepare_message(ERR_INVALID_DATA, mu);
+        return;
+    }
+    else if (partition_status::PS_SECONDARY == status() &&
+             mutation_decree - committed_decree_after_prepare > _options->staleness_for_commit)
+    {
+        derror("%s: mutation %s on_prepare failed as decree exceeds secondary staleness window",
+               name(),
+               mu->name());
+        ack_prepare_message(ERR_INVALID_DATA, mu);
+        return;
+    }
+
+    error_code err = _prepare_list->prepare(mu, status());
+    if (err != ERR_OK)
+    {
+        derror("%s: mutation %s on_prepare failed: %s", name(), mu->name(), err.to_string());
+        ack_prepare_message(ERR_INVALID_DATA, mu);
         return;
     }
 
@@ -432,7 +486,33 @@ void replica::on_prepare_reply(std::pair<mutation_ptr, partition_status::type> p
     }
     else
     {
-        ::dsn::unmarshall(reply, resp);
+        auto decode_err = ::dsn::try_unmarshall(reply, resp);
+        if (decode_err != ERR_OK)
+        {
+            derror("%s: mutation %s got invalid prepare reply from %s: %s",
+                   name(),
+                   mu->name(),
+                   node.to_string(),
+                   decode_err.to_string());
+            resp.err = decode_err;
+        }
+    }
+
+    if (resp.err == ERR_OK &&
+        (resp.ballot != get_ballot() || resp.decree != mu->data.header.decree))
+    {
+        derror(
+            "%s: mutation %s got inconsistent prepare reply from %s: "
+            "resp ballot = %" PRId64 ", local ballot = %" PRId64
+            ", resp decree = %" PRId64 ", local decree = %" PRId64,
+            name(),
+            mu->name(),
+            node.to_string(),
+            resp.ballot,
+            get_ballot(),
+            resp.decree,
+            mu->data.header.decree);
+        resp.err = ERR_INVALID_DATA;
     }
 
     if (resp.err == ERR_OK)
@@ -456,9 +536,6 @@ void replica::on_prepare_reply(std::pair<mutation_ptr, partition_status::type> p
 
     if (resp.err == ERR_OK)
     {
-        dassert (resp.ballot == get_ballot(), "");
-        dassert (resp.decree == mu->data.header.decree, "");
-
         switch (targetStatus)
         {
         case partition_status::PS_SECONDARY:
