@@ -575,8 +575,23 @@ void replica::on_learn_reply(
 
     if (resp.prepare_start_decree != invalid_decree)
     {
-        dassert(resp.type == learn_type::LT_CACHE, "");
-        dassert(resp.state.files.size() == 0, "");
+        // A cache-learn response from the (potentially corrupted) learnee must be
+        // self-consistent: type LT_CACHE with no state files (see replica::on_learn,
+        // which only ever pairs prepare_start_decree with LT_CACHE/meta-only state).
+        // A corrupted response can violate that invariant, so reject it through the
+        // learning-error path instead of aborting the whole process.
+        if (resp.type != learn_type::LT_CACHE || resp.state.files.size() != 0)
+        {
+            derror(
+                "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, inconsistent cache-learn "
+                "response (type = %s, file_count = %u), treat as learning error",
+                name(), req.signature, resp.config.primary.to_string(),
+                enum_to_string(resp.type),
+                static_cast<uint32_t>(resp.state.files.size())
+                );
+            handle_learning_error(ERR_INVALID_DATA, false);
+            return;
+        }
         dassert(_potential_secondary_states.learning_status == learner_status::LearningWithoutPrepare, "");
         _potential_secondary_states.learning_status = learner_status::LearningWithPrepareTransient;
 
@@ -769,12 +784,34 @@ void replica::on_copy_remote_state_completed(
     }
     else if (_potential_secondary_states.learning_status == learner_status::LearningWithPrepare)
     {
-        dassert(resp.type == learn_type::LT_CACHE, "");
+        // resp.type comes from the (potentially corrupted) learnee response. A cache
+        // learn (LearningWithPrepare) must carry LT_CACHE; route a corrupted type to
+        // the learning-error path below instead of aborting.
+        if (resp.type != learn_type::LT_CACHE)
+        {
+            derror(
+                "%s: on_copy_remote_state_completed[%016" PRIx64 "]: learnee = %s, "
+                "unexpected learn response type %s for cache learn, treat as learning error",
+                name(), req.signature, resp.config.primary.to_string(),
+                enum_to_string(resp.type)
+                );
+            err = ERR_INVALID_DATA;
+        }
+    }
+    else if (resp.type != learn_type::LT_APP && resp.type != learn_type::LT_LOG)
+    {
+        // a non cache learn must be either LT_APP or LT_LOG; a corrupted response
+        // type is rejected through the learning-error path instead of aborting.
+        derror(
+            "%s: on_copy_remote_state_completed[%016" PRIx64 "]: learnee = %s, "
+            "unexpected learn response type %s, treat as learning error",
+            name(), req.signature, resp.config.primary.to_string(),
+            enum_to_string(resp.type)
+            );
+        err = ERR_INVALID_DATA;
     }
     else
     {
-        dassert(resp.type == learn_type::LT_APP || resp.type == learn_type::LT_LOG, "");
-
         learn_state lstate;
         lstate.from_decree_excluded = resp.state.from_decree_excluded;
         lstate.to_decree_included = resp.state.to_decree_included;
