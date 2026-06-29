@@ -39,6 +39,7 @@
 #include "replica_stub.h"
 #include <dsn/utility/factory_store.h>
 #include "replication_app_base.h"
+#include <exception>
 
 # ifdef __TITLE__
 # undef __TITLE__
@@ -274,10 +275,21 @@ void replica::on_learn(dsn_message_t msg, const learn_request& request)
         local_committed_decree = last_committed_decree();
     }
 
-    dassert(request.last_committed_decree_in_app <= local_committed_decree, "");
+    if (request.last_committed_decree_in_app > local_committed_decree)
+    {
+        response.err = ERR_INVALID_DATA;
+        derror(
+            "%s: on_learn[%016" PRIx64 "]: learner = %s, invalid learner app committed "
+            "decree after local catch-up, learner_app_committed_decree = %" PRId64
+            ", local_committed_decree = %" PRId64,
+            name(), request.signature, request.learner.to_string(),
+            request.last_committed_decree_in_app, local_committed_decree
+            );
+        reply(msg, response);
+        return;
+    }
 
     decree learn_start_decree = request.last_committed_decree_in_app + 1;
-    dassert(learn_start_decree <= local_committed_decree + 1, "");
     bool delayed_replay_prepare_list = false;
 
     ddebug(
@@ -341,7 +353,19 @@ void replica::on_learn(dsn_message_t msg, const learn_request& request)
         for (decree d = learn_start_decree; d < response.prepare_start_decree; d++)
         {
             auto mu = _prepare_list->get_mutation_by_decree(d);
-            dassert(mu != nullptr, "");
+            if (mu == nullptr)
+            {
+                response.err = ERR_INVALID_DATA;
+                derror(
+                    "%s: on_learn[%016" PRIx64 "]: learner = %s, missing mutation %" PRId64
+                    " in prepare list, learn_start_decree = %" PRId64
+                    ", prepare_start_decree = %" PRId64,
+                    name(), request.signature, request.learner.to_string(), d,
+                    learn_start_decree, response.prepare_start_decree
+                    );
+                reply(msg, response);
+                return;
+            }
             mu->write_to(writer, nullptr);
             count++;
         }
@@ -496,7 +520,20 @@ void replica::on_learn_reply(
             name(), req.signature, resp.config.primary.to_string()
             );
         bool ret = update_local_configuration(resp.config);
-        dassert(ret, "");
+        if (!ret)
+        {
+            derror(
+                "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, invalid configuration "
+                "in learn response, ballot = %" PRId64 ", status = %s",
+                name(),
+                req.signature,
+                resp.config.primary.to_string(),
+                resp.config.ballot,
+                enum_to_string(resp.config.status)
+                );
+            handle_learning_error(ERR_INVALID_DATA, false);
+            return;
+        }
     }
 
     if (status() != partition_status::PS_POTENTIAL_SECONDARY)
@@ -580,14 +617,52 @@ void replica::on_learn_reply(
         // which only ever pairs prepare_start_decree with LT_CACHE/meta-only state).
         // A corrupted response can violate that invariant, so reject it through the
         // learning-error path instead of aborting the whole process.
-        if (resp.type != learn_type::LT_CACHE || resp.state.files.size() != 0)
+        if (resp.type != learn_type::LT_CACHE)
         {
             derror(
                 "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, inconsistent cache-learn "
-                "response (type = %s, file_count = %u), treat as learning error",
+                "response type = %s, treat as learning error",
                 name(), req.signature, resp.config.primary.to_string(),
-                enum_to_string(resp.type),
+                enum_to_string(resp.type)
+                );
+            handle_learning_error(ERR_INVALID_DATA, false);
+            return;
+        }
+        if (resp.state.files.size() != 0)
+        {
+            derror(
+                "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, invalid cache-learn "
+                "file_count = %u, treat as learning error",
+                name(), req.signature, resp.config.primary.to_string(),
                 static_cast<uint32_t>(resp.state.files.size())
+                );
+            handle_learning_error(ERR_INVALID_DATA, false);
+            return;
+        }
+        if (resp.prepare_start_decree <= 0)
+        {
+            derror(
+                "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, invalid cache-learn "
+                "prepare_start_decree = %" PRId64,
+                name(),
+                req.signature,
+                resp.config.primary.to_string(),
+                resp.prepare_start_decree
+                );
+            handle_learning_error(ERR_INVALID_DATA, false);
+            return;
+        }
+        if (resp.prepare_start_decree - 1 > resp.last_committed_decree)
+        {
+            derror(
+                "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, cache-learn "
+                "prepare_start_decree = %" PRId64
+                " exceeds remote_committed_decree = %" PRId64,
+                name(),
+                req.signature,
+                resp.config.primary.to_string(),
+                resp.prepare_start_decree,
+                resp.last_committed_decree
                 );
             handle_learning_error(ERR_INVALID_DATA, false);
             return;
@@ -623,10 +698,179 @@ void replica::on_learn_reply(
         binary_reader reader(resp.state.meta);
         while (!reader.is_eof())
         {
-            auto mu = mutation::read_from(reader, nullptr);            
+            mutation_ptr mu;
+            try
+            {
+                mu = mutation::read_from(reader, nullptr);
+            }
+            catch (const std::exception& ex)
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, invalid mutation "
+                    "cache in learn response: %s",
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string(),
+                    ex.what()
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+            if (mu == nullptr)
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, null mutation "
+                    "cache entry in learn response",
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string()
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+            if (mu->data.header.pid != get_gpid())
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, mutation %s "
+                    "has invalid gpid",
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string(),
+                    mu->name()
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+            if (mu->data.header.decree <= last_committed_decree())
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, mutation %s "
+                    "decree is not newer than local_committed_decree = %" PRId64,
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string(),
+                    mu->name(),
+                    last_committed_decree()
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+            if (mu->data.header.decree >= resp.prepare_start_decree)
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, mutation %s "
+                    "exceeds cache range, prepare_start_decree = %" PRId64,
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string(),
+                    mu->name(),
+                    resp.prepare_start_decree
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+            if (mu->data.header.last_committed_decree >= mu->data.header.decree)
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, mutation %s "
+                    "has invalid last_committed_decree = %" PRId64,
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string(),
+                    mu->name(),
+                    mu->data.header.last_committed_decree
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+            if (mu->data.header.decree - mu->data.header.last_committed_decree >=
+                _prepare_list->capacity())
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, mutation %s "
+                    "commit gap exceeds prepare-list capacity, mutation_last_committed_decree = %" PRId64
+                    ", prepare_list_capacity = %d",
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string(),
+                    mu->name(),
+                    mu->data.header.last_committed_decree,
+                    _prepare_list->capacity()
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
             if (mu->data.header.decree > last_committed_decree())
             {
                 dinfo("%s: on_learn_reply[%016" PRIx64 "]: apply learned mutation %s", name(), req.signature, mu->name());
+
+                if (mu->data.header.last_committed_decree > _prepare_list->max_decree())
+                {
+                    derror(
+                        "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, mutation %s "
+                        "requires missing committed mutations, mutation_last_committed_decree = %" PRId64
+                        ", prepare_list_max_decree = %" PRId64,
+                        name(),
+                        req.signature,
+                        resp.config.primary.to_string(),
+                        mu->name(),
+                        mu->data.header.last_committed_decree,
+                        _prepare_list->max_decree()
+                        );
+                    handle_learning_error(ERR_INVALID_DATA, false);
+                    return;
+                }
+                ballot last_bt = 0;
+                for (decree d = _prepare_list->last_committed_decree() + 1;
+                     d <= mu->data.header.last_committed_decree;
+                     d++)
+                {
+                    mutation_ptr committed_mu = _prepare_list->get_mutation_by_decree(d);
+                    if (committed_mu == nullptr)
+                    {
+                        derror(
+                            "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, mutation %s "
+                            "requires missing committed mutation %" PRId64,
+                            name(),
+                            req.signature,
+                            resp.config.primary.to_string(),
+                            mu->name(),
+                            d
+                            );
+                        handle_learning_error(ERR_INVALID_DATA, false);
+                        return;
+                    }
+                    if (!committed_mu->is_logged())
+                    {
+                        derror(
+                            "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, mutation %s "
+                            "requires unlogged committed mutation %" PRId64,
+                            name(),
+                            req.signature,
+                            resp.config.primary.to_string(),
+                            mu->name(),
+                            d
+                            );
+                        handle_learning_error(ERR_INVALID_DATA, false);
+                        return;
+                    }
+                    if (committed_mu->data.header.ballot < last_bt)
+                    {
+                        derror(
+                            "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, mutation %s "
+                            "requires committed mutation %" PRId64
+                            " with invalid ballot order",
+                            name(),
+                            req.signature,
+                            resp.config.primary.to_string(),
+                            mu->name(),
+                            d
+                            );
+                        handle_learning_error(ERR_INVALID_DATA, false);
+                        return;
+                    }
+                    last_bt = committed_mu->data.header.ballot;
+                }
 
                 // write to shared log with no callback, the later 2pc ensures that logs
                 // are written to the disk
@@ -647,7 +891,21 @@ void replica::on_learn_reply(
                 }
                 else
                 {
-                    _prepare_list->prepare(mu, partition_status::PS_POTENTIAL_SECONDARY);
+                    auto prepare_err = _prepare_list->prepare(mu, partition_status::PS_POTENTIAL_SECONDARY);
+                    if (prepare_err != ERR_OK)
+                    {
+                        derror(
+                            "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, apply learned "
+                            "mutation %s failed, err = %s",
+                            name(),
+                            req.signature,
+                            resp.config.primary.to_string(),
+                            mu->name(),
+                            prepare_err.to_string()
+                            );
+                        handle_learning_error(prepare_err, false);
+                        return;
+                    }
                 }
 
                 if (cache_range.first == 0 || mu->data.header.decree < cache_range.first)
@@ -670,13 +928,90 @@ void replica::on_learn_reply(
             );
 
         // further states are synced using 2pc, and we must commit now as those later 2pc messages thinks they should
+        if (resp.prepare_start_decree - 1 > _prepare_list->max_decree())
+        {
+            derror(
+                "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, missing mutation cache "
+                "before prepare_start_decree, prepare_start_decree = %" PRId64
+                ", prepare_list_max_decree = %" PRId64,
+                name(),
+                req.signature,
+                resp.config.primary.to_string(),
+                resp.prepare_start_decree,
+                _prepare_list->max_decree()
+                );
+            handle_learning_error(ERR_INVALID_DATA, false);
+            return;
+        }
+        ballot last_bt = 0;
+        for (decree d = _prepare_list->last_committed_decree() + 1;
+             d < resp.prepare_start_decree;
+             d++)
+        {
+            mutation_ptr mu = _prepare_list->get_mutation_by_decree(d);
+            if (mu == nullptr)
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, missing mutation "
+                    "%" PRId64 " in cache-learn commit range, prepare_start_decree = %" PRId64,
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string(),
+                    d,
+                    resp.prepare_start_decree
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+            if (!mu->is_logged())
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, unlogged mutation "
+                    "%" PRId64 " in cache-learn commit range, prepare_start_decree = %" PRId64,
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string(),
+                    d,
+                    resp.prepare_start_decree
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+            if (mu->data.header.ballot < last_bt)
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, invalid mutation "
+                    "%" PRId64 " ballot order in cache-learn commit range, prepare_start_decree = %" PRId64,
+                    name(),
+                    req.signature,
+                    resp.config.primary.to_string(),
+                    d,
+                    resp.prepare_start_decree
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+            last_bt = mu->data.header.ballot;
+        }
         _prepare_list->commit(resp.prepare_start_decree - 1, COMMIT_TO_DECREE_HARD);        
         dassert(_prepare_list->last_committed_decree() == _app->last_committed_decree(), "");
-        dassert(resp.state.files.size() == 0, "");
 
         // all state is complete
-        dassert(_app->last_committed_decree() + 1 >= _potential_secondary_states.learning_start_prepare_decree,
-            "state is incomplete");       
+        if (_app->last_committed_decree() + 1 < _potential_secondary_states.learning_start_prepare_decree)
+        {
+            derror(
+                "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, incomplete cache-learn "
+                "state, app_committed_decree = %" PRId64
+                ", learning_start_prepare_decree = %" PRId64,
+                name(),
+                req.signature,
+                resp.config.primary.to_string(),
+                _app->last_committed_decree(),
+                _potential_secondary_states.learning_start_prepare_decree
+                );
+            handle_learning_error(ERR_INVALID_DATA, false);
+            return;
+        }
 
         // go to next stage
         _potential_secondary_states.learning_status = learner_status::LearningWithPrepare;
