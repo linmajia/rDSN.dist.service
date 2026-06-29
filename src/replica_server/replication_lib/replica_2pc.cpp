@@ -302,7 +302,18 @@ void replica::on_prepare(dsn_message_t request)
         }
     }
 
-    dassert (rconfig.status == status(), "");    
+    if (rconfig.status != status())
+    {
+        derror("%s: mutation %s on_prepare failed as replica config status %s does not match "
+               "local status %s",
+               name(),
+               mu->name(),
+               enum_to_string(rconfig.status),
+               enum_to_string(status()));
+        ack_prepare_message(ERR_INVALID_DATA, mu);
+        return;
+    }
+
     if (mutation_decree <= last_committed_decree())
     {
         ack_prepare_message(ERR_OK, mu);
