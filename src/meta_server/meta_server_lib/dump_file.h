@@ -40,6 +40,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <iostream>
+#include <exception>
 
 inline void error_msg(int err_number, /*out*/char* buffer, int buflen)
 {
@@ -146,7 +147,23 @@ public:
             }
         }
 
-        std::shared_ptr<char> ptr(dsn::make_shared_array<char>(hdr.length));
+        // hdr.length comes straight from the on-disk block header and is not yet
+        // validated (the crc32 check below runs only after the payload is read).
+        // A corrupt/huge length would make make_shared_array throw bad_alloc and
+        // abort the process, so allocate defensively and treat failure as a
+        // corrupt block instead of letting it escape.
+        std::shared_ptr<char> ptr;
+        try
+        {
+            ptr = dsn::make_shared_array<char>(hdr.length);
+        }
+        catch (const std::exception& e)
+        {
+            derror("file %s: failed to allocate %u bytes for the next block "
+                   "(corrupt block length?), err(%s)",
+                   _filename.c_str(), hdr.length, e.what());
+            return -1;
+        }
         char* raw_mem = ptr.get();
         len = 0;
         while (len < hdr.length)
