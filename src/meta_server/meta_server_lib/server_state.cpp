@@ -39,6 +39,7 @@
 # include <sstream>
 # include <cinttypes>
 # include <string>
+# include <exception>
 
 # include "meta_service.h"
 # include "server_state.h"
@@ -243,35 +244,76 @@ error_code server_state::restore_from_local_storage(const char* local_path)
         return ERR_FILE_OPERATION_FAILED;
     }
 
-    blob data;
-    dassert(file->read_next_buffer(data)==1, "read format header fail");
     _all_apps.clear();
 
-    dassert(memcmp(data.data(), "binary", 6)==0, "");
-    while (true)
+    // The dump file is local on-disk metadata without a checksum. A truncated or corrupt
+    // file (partial dump, media error) must fail this restore with an error instead of
+    // aborting the whole meta-server. read_next_buffer returns 1 on a record, 0 at EOF and
+    // -1 on a read error; unmarshall and app_state::create can throw std::out_of_range on a
+    // short buffer or std::bad_alloc/std::length_error on a corrupt huge partition_count.
+    blob data;
+    if (file->read_next_buffer(data) != 1)
     {
-        int ans = file->read_next_buffer(data);
-        dassert(ans != -1, "read file failed");
-        if (ans == 0) //file end
-            break;
+        derror("restore from local storage failed: cannot read format header from %s", local_path);
+        return ERR_INVALID_DATA;
+    }
+    if (data.length() < 6 || memcmp(data.data(), "binary", 6) != 0)
+    {
+        derror("restore from local storage failed: bad format header in %s", local_path);
+        return ERR_INVALID_DATA;
+    }
 
-        app_info info;
-        binary_reader reader(data);
-        unmarshall(reader, info, DSF_THRIFT_BINARY);
-        std::shared_ptr<app_state> app = app_state::create(info);
-        _all_apps.emplace(app->app_id, app);
-
-        if (app->status == app_status::AS_AVAILABLE)
+    try
+    {
+        while (true)
         {
-            for (unsigned int i=0; i!=app->partition_count; ++i)
+            int ans = file->read_next_buffer(data);
+            if (ans == -1)
             {
-                ans = file->read_next_buffer(data);
-                binary_reader reader(data);
-                dassert(ans == 1, "unexpect read buffer, ret(%d)", ans);
-                unmarshall(reader, app->partitions[i], DSF_THRIFT_BINARY);
-                dassert(app->partitions[i].pid.get_partition_index()==i, "uncorrect partition data, gpid(%d.%d), appname(%s)", app->app_id, i, app->app_name.c_str());
+                derror("restore from local storage failed: read error in %s", local_path);
+                _all_apps.clear();
+                return ERR_INVALID_DATA;
+            }
+            if (ans == 0) //file end
+                break;
+
+            app_info info;
+            binary_reader reader(data);
+            unmarshall(reader, info, DSF_THRIFT_BINARY);
+            std::shared_ptr<app_state> app = app_state::create(info);
+            _all_apps.emplace(app->app_id, app);
+
+            if (app->status == app_status::AS_AVAILABLE)
+            {
+                for (unsigned int i=0; i!=app->partition_count; ++i)
+                {
+                    ans = file->read_next_buffer(data);
+                    if (ans != 1)
+                    {
+                        derror("restore from local storage failed: missing partition data, "
+                               "gpid(%d.%u), appname(%s)", app->app_id, i, app->app_name.c_str());
+                        _all_apps.clear();
+                        return ERR_INVALID_DATA;
+                    }
+                    binary_reader reader(data);
+                    unmarshall(reader, app->partitions[i], DSF_THRIFT_BINARY);
+                    if (app->partitions[i].pid.get_partition_index() != (int)i)
+                    {
+                        derror("restore from local storage failed: incorrect partition data, "
+                               "gpid(%d.%u), appname(%s)", app->app_id, i, app->app_name.c_str());
+                        _all_apps.clear();
+                        return ERR_INVALID_DATA;
+                    }
+                }
             }
         }
+    }
+    catch (const std::exception& ex)
+    {
+        derror("restore from local storage failed: corrupt metadata in %s, err = %s",
+               local_path, ex.what());
+        _all_apps.clear();
+        return ERR_INVALID_DATA;
     }
 
     for (auto& iter: _all_apps)
