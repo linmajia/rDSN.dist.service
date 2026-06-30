@@ -490,8 +490,9 @@ public:
     // close the log file
     void close();
 
-    // flush the log file
-    void flush() const;
+    // flush the log file; returns ERR_OK on success, or the underlying
+    // file-operation error (the caller decides how to surface it)
+    error_code flush() const;
 
     //
     // read routines

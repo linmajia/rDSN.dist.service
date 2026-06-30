@@ -211,7 +211,10 @@ void mutation_log_shared::write_pending_mutations(bool release_lock)
                     // flush to ensure that shared log data synced to disk
                     //
                     // FIXME : the file could have been closed
-                    lf->flush();
+                    //
+                    // A flush failure is treated like a write failure: overwrite
+                    // err so it is delivered to the write callbacks below.
+                    err = lf->flush();
                 }
             }
 
@@ -456,10 +459,16 @@ void mutation_log_private::write_pending_mutations(bool release_lock)
                 // so that we can get all mutations in learning process.
                 //
                 // FIXME : the file could have been closed
-                lf->flush();
-
-                // update _private_max_commit_on_disk after writen into log file done
-                update_max_commit_on_disk(max_commit);
+                //
+                // A flush failure is a recoverable disk error: overwrite err so
+                // it is reported through the io-error channel below, and skip the
+                // on-disk commit-point update since the data is not durable yet.
+                err = lf->flush();
+                if (err == ERR_OK)
+                {
+                    // update _private_max_commit_on_disk after writen into log file done
+                    update_max_commit_on_disk(max_commit);
+                }
             }
 
             // here we use _is_writing instead of _issued_write.expired() to check writing done,
@@ -1994,29 +2003,37 @@ void log_file::close()
     if (_handle)
     {
         error_code err = dsn_file_close(_handle);
-        dassert(
-            err == ERR_OK,
-            "dsn_file_close failed, err = %s",
-            err.to_string()
-            );
+        if (err != ERR_OK)
+        {
+            // A close failure (e.g. EINTR) is not recoverable here: the disk
+            // engine has already freed the underlying file object, so the handle
+            // must be dropped (retrying would be a use-after-free) and we proceed
+            // instead of aborting the whole replica server on teardown/cleanup.
+            derror("close log file %s failed, err = %s", path().c_str(), err.to_string());
+        }
 
         _handle = nullptr;
     }
 }
 
-void log_file::flush() const
+error_code log_file::flush() const
 {
     dassert (!_is_read, "log file must be of write mode");
 
     if (_handle)
     {
         error_code err = dsn_file_flush(_handle);
-        dassert(
-            err == ERR_OK,
-            "dsn_file_flush failed, err = %s",
-            err.to_string()
-            );
+        if (err != ERR_OK)
+        {
+            // A flush (fsync) failure is a recoverable disk error; report it to
+            // the caller (which routes it through the log write-failure channel)
+            // instead of aborting the whole replica server.
+            derror("flush log file %s failed, err = %s", path().c_str(), err.to_string());
+        }
+        return err;
     }
+
+    return ERR_OK;
 }
 
 error_code log_file::read_next_log_block(/*out*/::dsn::blob& bb)
