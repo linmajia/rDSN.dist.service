@@ -198,74 +198,101 @@ void mutation::write_to(binary_writer& writer, dsn_message_t /*to*/) const
 
 /*static*/ mutation_ptr mutation::read_from(binary_reader& reader, dsn_message_t from)
 {
-    mutation_ptr mu(new mutation());
-    reader.read_pod(mu->data.header);
-    if (mu->data.header.pid.get_app_id() <= 0 ||
-        mu->data.header.pid.get_partition_index() < 0 ||
-        mu->data.header.ballot < 0 ||
-        mu->data.header.decree <= 0 ||
-        mu->data.header.last_committed_decree < 0)
+    // A mutation image is read from on-disk logs and from learn/prepare RPC payloads,
+    // both of which may be corrupt or truncated. Field validations below reject a bad
+    // image directly with derror + return nullptr. The surrounding try/catch is the
+    // safety net for the lower-level throws we do not check by hand: std::out_of_range
+    // from binary_reader on a short/truncated buffer, and std::bad_alloc/std::length_error
+    // from resize()/vector on a garbage update count. Either way read_from returns nullptr,
+    // so every caller rejects the image through its own error channel instead of letting
+    // the exception abort the whole replica server.
+    try
     {
-        throw std::invalid_argument("invalid mutation header");
-    }
-
-    int size;
-    reader.read_pod(size);
-    if (size < 0)
-    {
-        throw std::invalid_argument("invalid mutation update count");
-    }
-    mu->data.updates.resize(size);
-    std::vector<int> lengths(size, 0);
-    for (int i = 0; i < size; ++i)
-    {
-        std::string name;
-        reader.read(name);
-        ::dsn::task_code code(dsn_task_code_from_string(name.c_str(), TASK_CODE_INVALID));
-        if (code == TASK_CODE_INVALID)
+        mutation_ptr mu(new mutation());
+        reader.read_pod(mu->data.header);
+        if (mu->data.header.pid.get_app_id() <= 0 ||
+            mu->data.header.pid.get_partition_index() < 0 ||
+            mu->data.header.ballot < 0 ||
+            mu->data.header.decree <= 0 ||
+            mu->data.header.last_committed_decree < 0)
         {
-            throw std::invalid_argument("invalid mutation task code: " + name);
+            derror("read mutation from binary failed: invalid mutation header");
+            return nullptr;
         }
-        mu->data.updates[i].code = code;
 
-        int type;
-        reader.read_pod(type);
-        if (type < DSF_INVALID || type > DSF_JSON)
+        int size;
+        reader.read_pod(size);
+        if (size < 0)
         {
-            throw std::invalid_argument("invalid mutation serialization type");
+            derror("read mutation from binary failed: invalid mutation update count");
+            return nullptr;
         }
-        mu->data.updates[i].serialization_type = type;
-
-        reader.read_pod(lengths[i]);
-        if (lengths[i] < 0)
+        mu->data.updates.resize(size);
+        std::vector<int> lengths(size, 0);
+        for (int i = 0; i < size; ++i)
         {
-            throw std::invalid_argument("invalid mutation update data length");
+            std::string name;
+            reader.read(name);
+            ::dsn::task_code code(dsn_task_code_from_string(name.c_str(), TASK_CODE_INVALID));
+            if (code == TASK_CODE_INVALID)
+            {
+                derror("read mutation from binary failed: invalid mutation task code: %s",
+                    name.c_str());
+                return nullptr;
+            }
+            mu->data.updates[i].code = code;
+
+            int type;
+            reader.read_pod(type);
+            if (type < DSF_INVALID || type > DSF_JSON)
+            {
+                derror("read mutation from binary failed: invalid mutation serialization type");
+                return nullptr;
+            }
+            mu->data.updates[i].serialization_type = type;
+
+            reader.read_pod(lengths[i]);
+            if (lengths[i] < 0)
+            {
+                derror("read mutation from binary failed: invalid mutation update data length");
+                return nullptr;
+            }
         }
+        for (int i = 0; i < size; ++i)
+        {
+            int len = lengths[i];
+            std::shared_ptr<char> holder((char*)dsn_transient_malloc(len), [](char* ptr){ dsn_transient_free((void*)ptr); });
+            reader.read(holder.get(), len);
+            mu->data.updates[i].data.assign(holder, 0, len);
+        }
+
+        mu->client_requests.resize(mu->data.updates.size());
+
+        if (nullptr != from)
+        {
+            mu->_prepare_request = from;
+            dsn_msg_add_ref(from); // released on dctor
+        }
+
+        snprintf_p(mu->_name, sizeof(mu->_name),
+            "%" PRId32 ".%" PRId32 ".%" PRId64 ".%" PRId64,
+            mu->data.header.pid.get_app_id(),
+            mu->data.header.pid.get_partition_index(),
+            mu->data.header.ballot,
+            mu->data.header.decree);
+
+        return mu;
     }
-    for (int i = 0; i < size; ++i)
+    catch (const std::exception& ex)
     {
-        int len = lengths[i];
-        std::shared_ptr<char> holder((char*)dsn_transient_malloc(len), [](char* ptr){ dsn_transient_free((void*)ptr); });
-        reader.read(holder.get(), len);
-        mu->data.updates[i].data.assign(holder, 0, len);
+        derror("read mutation from binary failed, err = %s", ex.what());
+        return nullptr;
     }
-
-    mu->client_requests.resize(mu->data.updates.size());
-
-    if (nullptr != from)
+    catch (...)
     {
-        mu->_prepare_request = from;
-        dsn_msg_add_ref(from); // released on dctor
+        derror("read mutation from binary failed, unknown exception");
+        return nullptr;
     }
-
-    snprintf_p(mu->_name, sizeof(mu->_name),
-        "%" PRId32 ".%" PRId32 ".%" PRId64 ".%" PRId64,
-        mu->data.header.pid.get_app_id(),
-        mu->data.header.pid.get_partition_index(),
-        mu->data.header.ballot,
-        mu->data.header.decree);
-
-    return mu;
 }
 
 int mutation::clear_prepare_or_commit_tasks()

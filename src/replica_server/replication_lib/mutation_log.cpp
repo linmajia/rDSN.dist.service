@@ -967,24 +967,19 @@ std::pair<log_file_ptr, int64_t> mutation_log::mark_new_offset(size_t size, bool
         while (!reader->is_eof())
         {
             auto old_size = reader->get_remaining_size();
-            mutation_ptr mu;
-            try
+            // mutation::read_from returns nullptr when the log block holds a
+            // corrupt/garbage mutation (bad header, update count, task code,
+            // serialization type, data length, or a truncated buffer). The log is read
+            // from disk and can be corrupted by a partial write or media error, so stop
+            // the replay through the existing error_code channel instead of aborting the
+            // whole process.
+            mutation_ptr mu = mutation::read_from(*reader, nullptr);
+            if (mu == nullptr)
             {
-                mu = mutation::read_from(*reader, nullptr);
-            }
-            catch (const std::exception& ex)
-            {
-                // mutation::read_from throws std::invalid_argument when the log block
-                // holds a corrupt/garbage mutation (bad header, update count, task code,
-                // serialization type, or data length). The log is read from disk and can
-                // be corrupted by a partial write or media error, so stop the replay
-                // through the existing error_code channel instead of letting the
-                // exception abort the whole process.
-                derror("replay mutation log %s failed: corrupt mutation at offset %" PRId64 ", err = %s",
-                    log->path().c_str(), end_offset, ex.what());
+                derror("replay mutation log %s failed: corrupt mutation at offset %" PRId64,
+                    log->path().c_str(), end_offset);
                 return ERR_INVALID_DATA;
             }
-            dassert(nullptr != mu, "");
             mu->set_logged();
 
             if (mu->data.header.log_offset != end_offset)
