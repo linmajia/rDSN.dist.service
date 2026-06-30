@@ -1830,6 +1830,21 @@ log_file::~log_file()
     }
 
     auto lf = new log_file(path, hfile, index, start_offset, true);
+
+    // Establish the end offset (start_offset + file size) for the read-mode file.
+    // A stat failure here is recoverable (e.g. the file was removed or renamed
+    // concurrently right after it was opened) and must not abort the replica, so
+    // reject the file through the existing error channel instead.
+    int64_t file_sz = 0;
+    if (!dsn::utils::filesystem::file_size(std::string(path), file_sz))
+    {
+        err = ERR_FILE_OPERATION_FAILED;
+        derror("get file size of log file %s failed", path);
+        delete lf;
+        return nullptr;
+    }
+    lf->_end_offset.store(start_offset + file_sz);
+
     lf->reset_stream();
     blob hdr_blob;
     err = lf->read_next_log_block(hdr_blob);
@@ -1909,15 +1924,10 @@ log_file::log_file(
     _crc32 = 0;
     memset(&_header, 0, sizeof(_header));
 
-    if (is_read)
-    {
-        int64_t sz;
-        if (!dsn::utils::filesystem::file_size(_path, sz))
-        {
-            dassert(false, "fail to get file size of %s.", _path.c_str());
-        }
-        _end_offset += sz;
-    }
+    // For a read-mode file the end offset equals start_offset + file size. The size
+    // is established by log_file::open_read() after construction so that a file_size()
+    // failure can be reported through its error channel instead of aborting the whole
+    // process from this constructor (which has no way to signal failure).
 }
 
 void log_file::close()
