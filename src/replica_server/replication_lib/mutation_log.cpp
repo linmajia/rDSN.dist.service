@@ -144,6 +144,29 @@ void mutation_log_shared::write_pending_mutations(bool release_lock)
     auto pr = mark_new_offset(_pending_write->size(), false);
     dassert(pr.second == _pending_write_start_offset, "");
 
+    if (pr.first == nullptr)
+    {
+        // No log file is available because a new one could not be created
+        // (mark_new_offset already notified the io-error callback for
+        // failover). Fail the queued callbacks instead of dereferencing a
+        // null log file, then drop the pending write.
+        derror("cannot write pending mutations: no available log file");
+        auto pending_callbacks = std::move(_pending_write_callbacks);
+        _pending_write = nullptr;
+        _pending_write_callbacks = nullptr;
+        _pending_write_mutations = nullptr;
+        _pending_write_start_offset = 0;
+        _slock.unlock();
+        if (pending_callbacks)
+        {
+            for (auto& c : *pending_callbacks)
+            {
+                c->enqueue_aio(ERR_FILE_OPERATION_FAILED, 0);
+            }
+        }
+        return;
+    }
+
     _is_writing.store(true, std::memory_order_release);
 
     // move or reset pending variables
@@ -368,6 +391,22 @@ void mutation_log_private::write_pending_mutations(bool release_lock)
     dassert(_pending_write->size() > 0, "");
     auto pr = mark_new_offset(_pending_write->size(), false);
     dassert(pr.second == _pending_write_start_offset, "");
+
+    if (pr.first == nullptr)
+    {
+        // No log file is available because a new one could not be created
+        // (mark_new_offset already notified the io-error callback for
+        // failover). Drop the pending write instead of dereferencing a null
+        // log file.
+        derror("cannot write pending mutations: no available log file");
+        _pending_write = nullptr;
+        _pending_write_mutations = nullptr;
+        _pending_write_start_offset = 0;
+        _pending_write_max_commit = 0;
+        _pending_write_max_decree = 0;
+        _plock.unlock();
+        return;
+    }
 
     _is_writing.store(true, std::memory_order_release);
 
@@ -854,8 +893,25 @@ std::pair<log_file_ptr, int64_t> mutation_log::mark_new_offset(size_t size, bool
         if (create_file)
         {
             auto ec = create_new_log_file();
-            dassert(ec == ERR_OK, "create new log file failed");
-            _switch_file_hint = false;
+            if (ec != ERR_OK)
+            {
+                // Creating a new log file can fail on recoverable disk errors
+                // (e.g. disk full or too many open files). Report the failure
+                // through the io-error channel so the replica fails over
+                // instead of aborting the whole process. _current_log_file is
+                // left unchanged (the old file on rotation, or null on the very
+                // first append); write_pending_mutations() guards against a
+                // null current file.
+                derror("create new log file failed, err = %s", ec.to_string());
+                if (_io_error_callback)
+                {
+                    _io_error_callback(ec);
+                }
+            }
+            else
+            {
+                _switch_file_hint = false;
+            }
         }
     }
 
