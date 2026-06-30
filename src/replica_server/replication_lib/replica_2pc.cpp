@@ -231,6 +231,15 @@ void replica::on_prepare(dsn_message_t request)
         }
     }
 
+    if (mu == nullptr)
+    {
+        // unmarshall above can still throw (caught here), but read_from now reports a
+        // corrupt/truncated mutation payload by returning nullptr.
+        derror("%s: invalid prepare request: corrupt mutation", name());
+        dsn_rpc_reply(dsn_msg_create_response(request), ERR_INVALID_DATA.get());
+        return;
+    }
+
     decree mutation_decree = mu->data.header.decree;
 
     dinfo("%s: mutation %s on_prepare", name(), mu->name());

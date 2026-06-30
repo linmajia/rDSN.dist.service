@@ -698,29 +698,14 @@ void replica::on_learn_reply(
         binary_reader reader(resp.state.meta);
         while (!reader.is_eof())
         {
-            mutation_ptr mu;
-            try
-            {
-                mu = mutation::read_from(reader, nullptr);
-            }
-            catch (const std::exception& ex)
-            {
-                derror(
-                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, invalid mutation "
-                    "cache in learn response: %s",
-                    name(),
-                    req.signature,
-                    resp.config.primary.to_string(),
-                    ex.what()
-                    );
-                handle_learning_error(ERR_INVALID_DATA, false);
-                return;
-            }
+            mutation_ptr mu = mutation::read_from(reader, nullptr);
             if (mu == nullptr)
             {
+                // resp.state.meta is an in-buffer private-log image from the learnee;
+                // a corrupt or truncated buffer makes read_from return nullptr.
                 derror(
-                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, null mutation "
-                    "cache entry in learn response",
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, invalid mutation "
+                    "cache in learn response",
                     name(),
                     req.signature,
                     resp.config.primary.to_string()
@@ -1476,7 +1461,22 @@ error_code replica::apply_learned_state_from_private_log(learn_state& state)
         binary_reader reader(state.meta);
         while (!reader.is_eof())
         {
-            auto mu = mutation::read_from(reader, nullptr);
+            // state.meta is an in-buffer private-log image received from the learnee
+            // (over the network, alongside the NFS-copied log files); a corrupt or
+            // truncated buffer makes read_from return nullptr. Stop the in-buffer
+            // replay through the existing error_code channel instead of aborting.
+            mutation_ptr mu = mutation::read_from(reader, nullptr);
+            if (mu == nullptr)
+            {
+                derror(
+                    "%s: apply_learned_state_from_private_log[%016" PRIx64 "]: "
+                    "invalid in-buffer private log mutation",
+                    name(),
+                    _potential_secondary_states.learning_version
+                    );
+                err = ERR_INVALID_DATA;
+                break;
+            }
             auto d = mu->data.header.decree;
             if (d <= plist.last_committed_decree())
                 continue;

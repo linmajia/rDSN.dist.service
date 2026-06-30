@@ -144,6 +144,29 @@ void mutation_log_shared::write_pending_mutations(bool release_lock)
     auto pr = mark_new_offset(_pending_write->size(), false);
     dassert(pr.second == _pending_write_start_offset, "");
 
+    if (pr.first == nullptr)
+    {
+        // No log file is available because a new one could not be created
+        // (mark_new_offset already notified the io-error callback for
+        // failover). Fail the queued callbacks instead of dereferencing a
+        // null log file, then drop the pending write.
+        derror("cannot write pending mutations: no available log file");
+        auto pending_callbacks = std::move(_pending_write_callbacks);
+        _pending_write = nullptr;
+        _pending_write_callbacks = nullptr;
+        _pending_write_mutations = nullptr;
+        _pending_write_start_offset = 0;
+        _slock.unlock();
+        if (pending_callbacks)
+        {
+            for (auto& c : *pending_callbacks)
+            {
+                c->enqueue_aio(ERR_FILE_OPERATION_FAILED, 0);
+            }
+        }
+        return;
+    }
+
     _is_writing.store(true, std::memory_order_release);
 
     // move or reset pending variables
@@ -188,7 +211,10 @@ void mutation_log_shared::write_pending_mutations(bool release_lock)
                     // flush to ensure that shared log data synced to disk
                     //
                     // FIXME : the file could have been closed
-                    lf->flush();
+                    //
+                    // A flush failure is treated like a write failure: overwrite
+                    // err so it is delivered to the write callbacks below.
+                    err = lf->flush();
                 }
             }
 
@@ -369,6 +395,22 @@ void mutation_log_private::write_pending_mutations(bool release_lock)
     auto pr = mark_new_offset(_pending_write->size(), false);
     dassert(pr.second == _pending_write_start_offset, "");
 
+    if (pr.first == nullptr)
+    {
+        // No log file is available because a new one could not be created
+        // (mark_new_offset already notified the io-error callback for
+        // failover). Drop the pending write instead of dereferencing a null
+        // log file.
+        derror("cannot write pending mutations: no available log file");
+        _pending_write = nullptr;
+        _pending_write_mutations = nullptr;
+        _pending_write_start_offset = 0;
+        _pending_write_max_commit = 0;
+        _pending_write_max_decree = 0;
+        _plock.unlock();
+        return;
+    }
+
     _is_writing.store(true, std::memory_order_release);
 
     update_max_decree(_private_gpid, _pending_write_max_decree);
@@ -417,10 +459,16 @@ void mutation_log_private::write_pending_mutations(bool release_lock)
                 // so that we can get all mutations in learning process.
                 //
                 // FIXME : the file could have been closed
-                lf->flush();
-
-                // update _private_max_commit_on_disk after writen into log file done
-                update_max_commit_on_disk(max_commit);
+                //
+                // A flush failure is a recoverable disk error: overwrite err so
+                // it is reported through the io-error channel below, and skip the
+                // on-disk commit-point update since the data is not durable yet.
+                err = lf->flush();
+                if (err == ERR_OK)
+                {
+                    // update _private_max_commit_on_disk after writen into log file done
+                    update_max_commit_on_disk(max_commit);
+                }
             }
 
             // here we use _is_writing instead of _issued_write.expired() to check writing done,
@@ -854,8 +902,25 @@ std::pair<log_file_ptr, int64_t> mutation_log::mark_new_offset(size_t size, bool
         if (create_file)
         {
             auto ec = create_new_log_file();
-            dassert(ec == ERR_OK, "create new log file failed");
-            _switch_file_hint = false;
+            if (ec != ERR_OK)
+            {
+                // Creating a new log file can fail on recoverable disk errors
+                // (e.g. disk full or too many open files). Report the failure
+                // through the io-error channel so the replica fails over
+                // instead of aborting the whole process. _current_log_file is
+                // left unchanged (the old file on rotation, or null on the very
+                // first append); write_pending_mutations() guards against a
+                // null current file.
+                derror("create new log file failed, err = %s", ec.to_string());
+                if (_io_error_callback)
+                {
+                    _io_error_callback(ec);
+                }
+            }
+            else
+            {
+                _switch_file_hint = false;
+            }
         }
     }
 
@@ -902,8 +967,19 @@ std::pair<log_file_ptr, int64_t> mutation_log::mark_new_offset(size_t size, bool
         while (!reader->is_eof())
         {
             auto old_size = reader->get_remaining_size();
+            // mutation::read_from returns nullptr when the log block holds a
+            // corrupt/garbage mutation (bad header, update count, task code,
+            // serialization type, data length, or a truncated buffer). The log is read
+            // from disk and can be corrupted by a partial write or media error, so stop
+            // the replay through the existing error_code channel instead of aborting the
+            // whole process.
             mutation_ptr mu = mutation::read_from(*reader, nullptr);
-            dassert(nullptr != mu, "");
+            if (mu == nullptr)
+            {
+                derror("replay mutation log %s failed: corrupt mutation at offset %" PRId64,
+                    log->path().c_str(), end_offset);
+                return ERR_INVALID_DATA;
+            }
             mu->set_logged();
 
             if (mu->data.header.log_offset != end_offset)
@@ -1814,6 +1890,21 @@ log_file::~log_file()
     }
 
     auto lf = new log_file(path, hfile, index, start_offset, true);
+
+    // Establish the end offset (start_offset + file size) for the read-mode file.
+    // A stat failure here is recoverable (e.g. the file was removed or renamed
+    // concurrently right after it was opened) and must not abort the replica, so
+    // reject the file through the existing error channel instead.
+    int64_t file_sz = 0;
+    if (!dsn::utils::filesystem::file_size(std::string(path), file_sz))
+    {
+        err = ERR_FILE_OPERATION_FAILED;
+        derror("get file size of log file %s failed", path);
+        delete lf;
+        return nullptr;
+    }
+    lf->_end_offset.store(start_offset + file_sz);
+
     lf->reset_stream();
     blob hdr_blob;
     err = lf->read_next_log_block(hdr_blob);
@@ -1893,15 +1984,10 @@ log_file::log_file(
     _crc32 = 0;
     memset(&_header, 0, sizeof(_header));
 
-    if (is_read)
-    {
-        int64_t sz;
-        if (!dsn::utils::filesystem::file_size(_path, sz))
-        {
-            dassert(false, "fail to get file size of %s.", _path.c_str());
-        }
-        _end_offset += sz;
-    }
+    // For a read-mode file the end offset equals start_offset + file size. The size
+    // is established by log_file::open_read() after construction so that a file_size()
+    // failure can be reported through its error channel instead of aborting the whole
+    // process from this constructor (which has no way to signal failure).
 }
 
 void log_file::close()
@@ -1912,29 +1998,37 @@ void log_file::close()
     if (_handle)
     {
         error_code err = dsn_file_close(_handle);
-        dassert(
-            err == ERR_OK,
-            "dsn_file_close failed, err = %s",
-            err.to_string()
-            );
+        if (err != ERR_OK)
+        {
+            // A close failure (e.g. EINTR) is not recoverable here: the disk
+            // engine has already freed the underlying file object, so the handle
+            // must be dropped (retrying would be a use-after-free) and we proceed
+            // instead of aborting the whole replica server on teardown/cleanup.
+            derror("close log file %s failed, err = %s", path().c_str(), err.to_string());
+        }
 
         _handle = nullptr;
     }
 }
 
-void log_file::flush() const
+error_code log_file::flush() const
 {
     dassert (!_is_read, "log file must be of write mode");
 
     if (_handle)
     {
         error_code err = dsn_file_flush(_handle);
-        dassert(
-            err == ERR_OK,
-            "dsn_file_flush failed, err = %s",
-            err.to_string()
-            );
+        if (err != ERR_OK)
+        {
+            // A flush (fsync) failure is a recoverable disk error; report it to
+            // the caller (which routes it through the log write-failure channel)
+            // instead of aborting the whole replica server.
+            derror("flush log file %s failed, err = %s", path().c_str(), err.to_string());
+        }
+        return err;
     }
+
+    return ERR_OK;
 }
 
 error_code log_file::read_next_log_block(/*out*/::dsn::blob& bb)

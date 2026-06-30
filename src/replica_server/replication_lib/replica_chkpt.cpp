@@ -274,7 +274,17 @@ namespace dsn {
                 // we must give the app the full path of the check point
                 for (std::string& filename: resp->state.files)
                 {
-                    dassert(filename.find_last_of("/\\")==std::string::npos, "invalid file name");
+                    // filename comes from a peer's learn_response. A value containing a
+                    // path separator would let path_combine() write outside chk_dir
+                    // (path traversal). Reject the whole checkpoint on such untrusted
+                    // remote data instead of aborting the process.
+                    if (filename.find_last_of("/\\") != std::string::npos)
+                    {
+                        derror("invalid checkpoint file name from %s: %s",
+                            resp->address.to_string(), filename.c_str());
+                        _primary_states.checkpoint_task = nullptr;
+                        return;
+                    }
                     filename = utils::filesystem::path_combine(chk_dir, filename);
                 }
                 _app->apply_checkpoint(DSN_CHKPT_COPY, resp->state);
