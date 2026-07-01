@@ -42,6 +42,7 @@
 #include "meta_server_failure_detector.h"
 #include "server_load_balancer.h"
 #include <chrono>
+#include <thread>
 
 #ifdef __TITLE__
 #undef __TITLE__
@@ -228,6 +229,10 @@ error_code meta_service::start()
     while ((err = _state->initialize_data_structure()) != ERR_OK)
     {
         derror("recover server state failed, err = %s, retry ...", err.to_string());
+        // back off between retries so a persistent failure (e.g. corrupt state
+        // in remote storage, which is now reported rather than asserted) does
+        // not spin this recovery loop and flood the log.
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     _state->register_cli_commands();
 

@@ -78,7 +78,16 @@ public:
     ~dump_file()
     {
         if (_file_handle != nullptr)
-            fclose(_file_handle);
+        {
+            // In write mode fclose flushes any buffered data, so a disk error
+            // (e.g. ENOSPC) can surface here. There is no way to propagate it
+            // out of a destructor, so at least make it visible instead of
+            // silently losing the tail of the dump. Callers that need to know
+            // the dump succeeded must call flush() and check its result before
+            // destroying this object.
+            if (fclose(_file_handle) != 0 && _is_write)
+                derror("close dump file %s failed, the dump may be incomplete", _filename.c_str());
+        }
     }
 
     static std::shared_ptr<dump_file> open_file(const char* filename, bool is_write)
@@ -130,6 +139,22 @@ public:
     int append_buffer(const std::string& data)
     {
         return append_buffer(data.c_str(), data.size());
+    }
+    // Force any buffered data out to the OS and report a write failure that
+    // would otherwise only surface (and be swallowed) at fclose time. Returns
+    // 0 on success and -1 on error. Callers must invoke this after the last
+    // append_buffer and check the result before treating the dump as complete.
+    int flush()
+    {
+        static __thread char msg_buffer[128];
+
+        dassert(_is_write, "call flush when open file with read mode");
+
+        if (_file_handle != nullptr && fflush(_file_handle) != 0)
+        {
+            log_error_and_return(msg_buffer, 128);
+        }
+        return 0;
     }
     int read_next_buffer(/*out*/dsn::blob& output)
     {

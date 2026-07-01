@@ -166,21 +166,38 @@ error_code server_state::dump_app_states(const char* local_path, const std::func
         return ERR_FILE_OPERATION_FAILED;
     }
 
-    file->append_buffer("binary", 6);
+    // append_buffer/flush return -1 when the underlying write fails (e.g. the
+    // disk is full or hits an I/O error). Those errors must abort the dump and
+    // be reported to the caller; otherwise a truncated/corrupt dump would be
+    // silently reported as a success and later fail to restore.
+    if (file->append_buffer("binary", 6) != 0) {
+        derror("dump to file(%s) failed: cannot write format header", local_path);
+        return ERR_FILE_OPERATION_FAILED;
+    }
     app_state* app;
     while ( (app = iterator())!=nullptr)
     {
         dassert(app->status==app_status::AS_AVAILABLE || app->status==app_status::AS_DROPPED, "invalid app status");
         binary_writer writer;
         dsn::marshall(writer, *app, DSF_THRIFT_BINARY);
-        file->append_buffer(writer.get_buffer());
+        if (file->append_buffer(writer.get_buffer()) != 0) {
+            derror("dump to file(%s) failed: cannot write state of app(%s)", local_path, app->app_name.c_str());
+            return ERR_FILE_OPERATION_FAILED;
+        }
         if (app_status::AS_AVAILABLE == app->status) {
             for (const partition_configuration& pc: app->partitions) {
                 binary_writer writer;
                 dsn::marshall(writer, pc, DSF_THRIFT_BINARY);
-                file->append_buffer(writer.get_buffer());
+                if (file->append_buffer(writer.get_buffer()) != 0) {
+                    derror("dump to file(%s) failed: cannot write a partition config of app(%s)", local_path, app->app_name.c_str());
+                    return ERR_FILE_OPERATION_FAILED;
+                }
             }
         }
+    }
+    if (file->flush() != 0) {
+        derror("dump to file(%s) failed: cannot flush buffered data", local_path);
+        return ERR_FILE_OPERATION_FAILED;
     }
     return ERR_OK;
 }
@@ -460,9 +477,18 @@ dsn::error_code server_state::sync_apps_from_remote_storage()
                 if (ec == ERR_OK)
                 {
                     partition_configuration pc;
-                    dsn::json::string_tokenizer tokenizer(value);
-                    json_decode(tokenizer, pc);
-                    dassert(pc.pid.get_app_id() == app->app_id && pc.pid.get_partition_index() == partition_id, "invalid partition config");
+                    if (!dsn::json::json_forwarder<partition_configuration>::decode(value, pc))
+                    {
+                        derror("invalid partition json data from remote storage, path = %s", partition_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
+                    if (pc.pid.get_app_id() != app->app_id || pc.pid.get_partition_index() != partition_id)
+                    {
+                        derror("invalid partition config from remote storage, path = %s", partition_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
                     {
                         zauto_write_lock l(_lock);
                         app->partitions[partition_id] = pc;
@@ -492,9 +518,42 @@ dsn::error_code server_state::sync_apps_from_remote_storage()
                 if (ec == ERR_OK)
                 {
                     app_info info;
-                    dassert(dsn::json::json_forwarder<app_info>::decode(value, info), "invalid json data");
-                    dassert(info.status==app_status::AS_AVAILABLE || info.status==app_status::AS_DROPPED, "invalid app status in remote storage");
-                    std::shared_ptr<app_state> app = app_state::create(info);
+                    if (!dsn::json::json_forwarder<app_info>::decode(value, info))
+                    {
+                        derror("invalid app json data from remote storage, path = %s", app_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
+                    if (info.status != app_status::AS_AVAILABLE && info.status != app_status::AS_DROPPED)
+                    {
+                        derror("invalid app status in remote storage, path = %s", app_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
+                    if (info.partition_count <= 0)
+                    {
+                        derror("invalid partition_count(%d) in remote storage, path = %s",
+                            info.partition_count, app_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
+                    std::shared_ptr<app_state> app;
+                    try
+                    {
+                        // partition_count comes from (semi-untrusted) remote storage;
+                        // a corrupt huge/negative value makes app_state allocate its
+                        // partition vector and throw std::bad_alloc/std::length_error.
+                        // Report it as invalid data instead of aborting the meta server.
+                        app = app_state::create(info);
+                    }
+                    catch (const std::exception& ex)
+                    {
+                        derror("invalid app(%s) in remote storage: cannot allocate %d "
+                               "partitions, err: %s", info.app_name.c_str(),
+                               info.partition_count, ex.what());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
                     {
                         zauto_write_lock l(_lock);
                         _all_apps.emplace(app->app_id, app);
@@ -827,6 +886,19 @@ void server_state::create_app(dsn_message_t msg)
     
     ddebug("create app request, name(%s), type(%s)", request.app_name.c_str(), request.options.app_type.c_str());
 
+    // partition_count is a client-supplied value; a non-positive value would create
+    // a nonsensical app, so reject it here with a clear error (a huge value is guarded
+    // separately below when app_state allocates its partition vector).
+    if (request.options.partition_count <= 0)
+    {
+        derror("create app(%s) failed: invalid partition_count %d",
+            request.app_name.c_str(), request.options.partition_count);
+        response.err = ERR_INVALID_PARAMETERS;
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
+    }
+
     auto option_match_check = [](const create_app_options& opt, const app_state& exist_app)
     {
         return opt.partition_count==exist_app.partition_count && opt.app_type==exist_app.app_type &&
@@ -859,8 +931,6 @@ void server_state::create_app(dsn_message_t msg)
             }
         }
         else {
-            will_create_app = true;
-
             app_info info;
             info.app_id = next_app_id();
             info.app_name = request.app_name;
@@ -871,10 +941,27 @@ void server_state::create_app(dsn_message_t msg)
             info.partition_count = request.options.partition_count;
             info.status = app_status::AS_CREATING;
 
-            app = app_state::create(info);
-            _all_apps.emplace(app->app_id, app);
-            _exist_apps.emplace(request.app_name, app);
-            ++_creating_apps_count;
+            try
+            {
+                // partition_count is an untrusted, client-supplied value; a very
+                // large value makes app_state's partitions.assign(partition_count,
+                // ...) throw std::bad_alloc/std::length_error. Reject the request
+                // with an error instead of aborting the whole meta server.
+                app = app_state::create(info);
+            }
+            catch (const std::exception& ex)
+            {
+                derror("create app(%s) failed: cannot allocate %d partitions, err: %s",
+                    request.app_name.c_str(), request.options.partition_count, ex.what());
+                response.err = ERR_INVALID_PARAMETERS;
+            }
+            if (app != nullptr)
+            {
+                will_create_app = true;
+                _all_apps.emplace(app->app_id, app);
+                _exist_apps.emplace(request.app_name, app);
+                ++_creating_apps_count;
+            }
         }
     }
 
