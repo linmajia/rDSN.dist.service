@@ -36,6 +36,7 @@
 
 # include <functional>
 # include <memory>
+# include <vector>
 # include "server_load_balancer.h"
 
 namespace dsn { namespace replication {

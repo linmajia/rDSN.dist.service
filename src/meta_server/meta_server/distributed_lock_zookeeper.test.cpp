@@ -5,6 +5,7 @@
 #include <functional>
 #include <dsn/service_api_cpp.h>
 #include <thread>
+#include <chrono>
 #include <gtest/gtest.h>
 
 using namespace dsn;

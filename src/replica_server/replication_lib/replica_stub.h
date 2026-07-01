@@ -47,6 +47,8 @@
 # include <memory>
 # include <functional>
 # include <utility>
+# include <string>
+# include <unordered_map>
 
 namespace dsn { namespace replication {
 

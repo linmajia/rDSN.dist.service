@@ -39,6 +39,12 @@
 # include <cstdint>
 # include <memory>
 # include <functional>
+# include <string>
+# include <sstream>
+# include <thread>
+# include <atomic>
+# include <chrono>
+# include <iostream>
 
 using namespace ::dsn;
 using namespace ::dsn::replication;

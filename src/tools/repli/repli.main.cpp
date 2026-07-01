@@ -37,6 +37,7 @@
 # include <dsn/cpp/utils.h>
 # include <iostream>
 # include <thread>
+# include <chrono>
 # if !defined (_WIN32)
 # include "unistd.h"
 # endif

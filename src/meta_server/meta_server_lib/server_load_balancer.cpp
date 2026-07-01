@@ -1,5 +1,7 @@
 #include "server_load_balancer.h"
 #include <memory>
+#include <sstream>
+#include <vector>
 
 # ifdef __TITLE__
 # undef __TITLE__

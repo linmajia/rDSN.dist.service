@@ -37,6 +37,7 @@
 
 # include "simple_kv.client.h"
 # include <memory>
+# include <string>
 
 namespace dsn { namespace replication { namespace test {
 

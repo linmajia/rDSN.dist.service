@@ -42,6 +42,7 @@
 #include <cstdint>
 #include <functional>
 #include <utility>
+#include <cinttypes>
 
 # ifdef __TITLE__
 # undef __TITLE__

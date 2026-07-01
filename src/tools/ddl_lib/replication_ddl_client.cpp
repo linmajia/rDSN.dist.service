@@ -38,6 +38,7 @@
 #include <fstream>
 #include <iomanip>
 #include <cstring>
+#include <chrono>
 
 namespace dsn{ namespace replication{
 

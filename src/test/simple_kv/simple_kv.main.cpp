@@ -39,6 +39,9 @@
 # include "client.h"
 # include "simple_kv.server.impl.h"
 # include <cstdlib>
+# include <thread>
+# include <chrono>
+# include <iostream>
 
 # ifdef __TITLE__
 # undef __TITLE__

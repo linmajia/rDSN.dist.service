@@ -35,6 +35,7 @@
 
 #include "prepare_list.h"
 #include "mutation.h"
+#include <cinttypes>
 
 # ifdef __TITLE__
 # undef __TITLE__

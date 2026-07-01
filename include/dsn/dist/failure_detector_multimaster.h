@@ -38,6 +38,7 @@
 # include <dsn/dist/failure_detector.h>
 # include <dsn/cpp/zlocks.h>
 # include <functional>
+# include <vector>
 
 namespace dsn { 
     namespace dist {

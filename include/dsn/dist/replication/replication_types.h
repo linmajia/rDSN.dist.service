@@ -10,6 +10,10 @@
 #include <dsn/cpp/serialization_helper/dsn.layer2_types.h>
 #include <iosfwd>
 #include <cstdint>
+#include <string>
+#include <vector>
+#include <map>
+#include <set>
 
 #include <thrift/Thrift.h>
 #include <thrift/TApplicationException.h>

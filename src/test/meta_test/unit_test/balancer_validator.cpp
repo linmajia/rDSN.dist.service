@@ -8,6 +8,7 @@
 #include "server_load_balancer.h"
 #include "greedy_load_balancer.h"
 #include "../misc/misc.h"
+#include <iostream>
 
 using namespace dsn::replication;
 

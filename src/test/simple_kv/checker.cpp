@@ -48,6 +48,7 @@
 
 # include <sstream>
 # include <cstring>
+# include <iostream>
 
 # include <dsn/tool_api.h>
 

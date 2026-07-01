@@ -42,6 +42,7 @@
 #include <exception>
 #include <functional>
 #include <utility>
+#include <chrono>
 
 # ifdef __TITLE__
 # undef __TITLE__

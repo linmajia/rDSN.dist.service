@@ -41,6 +41,8 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <cinttypes>
+#include <chrono>
 
 # ifdef __TITLE__
 # undef __TITLE__

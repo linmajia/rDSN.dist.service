@@ -38,6 +38,9 @@
 # include <condition_variable>
 # include <cstring>
 # include <cstdint>
+# include <string>
+# include <set>
+# include <iostream>
 
 using namespace ::dsn;
 using namespace ::dsn::replication;

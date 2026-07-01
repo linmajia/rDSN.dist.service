@@ -42,6 +42,10 @@
 #include <memory>
 #include <functional>
 #include <utility>
+#include <string>
+#include <vector>
+#include <map>
+#include <unordered_map>
 
 namespace dsn { namespace replication {
 

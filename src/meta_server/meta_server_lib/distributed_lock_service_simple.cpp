@@ -38,6 +38,9 @@
 # include <cstdint>
 # include <functional>
 # include <utility>
+# include <string>
+# include <vector>
+# include <chrono>
 
 namespace dsn
 {

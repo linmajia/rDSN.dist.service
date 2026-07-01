@@ -59,6 +59,9 @@
 # include <dsn/dist/failure_detector/fd.client.h>
 # include <dsn/dist/failure_detector/fd.server.h>
 # include <cstdint>
+# include <vector>
+# include <unordered_map>
+# include <unordered_set>
 
 namespace dsn { namespace fd {
 
