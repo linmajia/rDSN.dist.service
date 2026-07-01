@@ -41,6 +41,8 @@
 #include "replica.h"
 #include <dsn/cpp/utils.h>
 #include <sstream>
+#include <cstring>
+#include <utility>
 
 # ifdef __TITLE__
 # undef __TITLE__

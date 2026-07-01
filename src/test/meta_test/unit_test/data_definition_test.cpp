@@ -6,6 +6,7 @@
 #include "meta_service.h"
 #include "server_state.h"
 #include "meta_service_test_app.h"
+#include <chrono>
 
 dsn_message_t create_corresponding_receive(dsn_message_t request_msg)
 {

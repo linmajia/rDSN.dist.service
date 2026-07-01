@@ -3,6 +3,9 @@
 #include <gtest/gtest.h>
 #include <dsn/service_api_cpp.h>
 #include <vector>
+#include <cstring>
+#include <tuple>
+#include <chrono>
 
 #ifdef __TITLE__
 #undef __TITLE__

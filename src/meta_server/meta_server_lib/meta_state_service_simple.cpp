@@ -40,6 +40,7 @@
 # include <chrono>
 # include <stack>
 # include <utility>
+# include <cstring>
 
 namespace dsn
 {

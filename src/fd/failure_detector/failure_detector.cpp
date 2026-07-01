@@ -38,6 +38,9 @@
 # include <chrono>
 # include <ctime>
 # include <cinttypes>
+# include <cstdint>
+# include <utility>
+# include <vector>
 
 # ifdef __TITLE__
 # undef __TITLE__

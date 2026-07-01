@@ -38,6 +38,7 @@
 # include "replica.h"
 # include <dsn/tool-api/task_spec.h>
 # include <stdexcept>
+# include <cstring>
 
 namespace dsn { namespace replication {
 

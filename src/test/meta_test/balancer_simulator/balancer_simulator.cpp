@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <memory>
+#include <utility>
 #include <gtest/gtest.h>
 
 #include "meta_data.h"

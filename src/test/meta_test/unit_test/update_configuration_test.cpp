@@ -8,6 +8,7 @@
 #include "greedy_load_balancer.h"
 #include "meta_service_test_app.h"
 #include "../misc/misc.h"
+#include <chrono>
 
 using namespace dsn::replication;
 

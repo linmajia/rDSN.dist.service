@@ -41,6 +41,7 @@
 #include "server_state.h"
 #include "meta_server_failure_detector.h"
 #include "server_load_balancer.h"
+#include <chrono>
 
 #ifdef __TITLE__
 #undef __TITLE__

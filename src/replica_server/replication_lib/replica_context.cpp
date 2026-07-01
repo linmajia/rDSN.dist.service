@@ -34,6 +34,8 @@
  */
 
 #include "replica_context.h"
+#include <cstdint>
+#include <algorithm>
 
 # ifdef __TITLE__
 # undef __TITLE__

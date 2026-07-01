@@ -37,6 +37,7 @@
 # include "daemon.server.h"
 # include <dsn/cpp/utils.h>
 # include <gtest/gtest.h>
+# include <chrono>
 
 using namespace ::dsn;
 using namespace ::dsn::replication;

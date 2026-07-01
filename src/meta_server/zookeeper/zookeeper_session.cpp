@@ -37,6 +37,9 @@
 #include "zookeeper_session.h"
 #include "zookeeper_session_mgr.h"
 #include <new>
+#include <cstdlib>
+#include <algorithm>
+#include <utility>
 
 #ifdef __TITLE__
 #undef __TITLE__

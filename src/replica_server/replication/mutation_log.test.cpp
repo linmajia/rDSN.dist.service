@@ -35,6 +35,16 @@
 # include "mutation_log.h"
 # include <gtest/gtest.h>
 # include <cstdio>
+# include <cstring>
+# include <cstdint>
+# include <memory>
+# include <functional>
+# include <string>
+# include <sstream>
+# include <thread>
+# include <atomic>
+# include <chrono>
+# include <iostream>
 
 using namespace ::dsn;
 using namespace ::dsn::replication;

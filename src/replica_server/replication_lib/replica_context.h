@@ -36,6 +36,9 @@
 # pragma once
 
 # include "mutation.h"
+# include <cstdint>
+# include <string>
+# include <unordered_map>
 
 namespace dsn { namespace replication {
 

@@ -38,6 +38,14 @@
 #include "replication_common.h"
 #include "mutation.h"
 #include <atomic>
+#include <cstdint>
+#include <memory>
+#include <functional>
+#include <utility>
+#include <string>
+#include <vector>
+#include <map>
+#include <unordered_map>
 
 namespace dsn { namespace replication {
 

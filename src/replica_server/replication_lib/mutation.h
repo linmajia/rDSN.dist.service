@@ -38,6 +38,9 @@
 # include "replication_common.h"
 # include <list>
 # include <atomic>
+# include <functional>
+# include <cinttypes>
+# include <vector>
 # include <dsn/utility/link.h>
 # include <dsn/cpp/perf_counter_.h>
 

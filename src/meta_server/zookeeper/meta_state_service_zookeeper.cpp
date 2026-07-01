@@ -37,6 +37,8 @@
 #include "zookeeper_session_mgr.h"
 #include "zookeeper_session.h"
 #include "zookeeper_error.h"
+#include <cstring>
+#include <functional>
 
 # ifdef __TITLE__
 # undef __TITLE__

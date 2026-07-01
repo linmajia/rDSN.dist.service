@@ -40,6 +40,7 @@
 #include <dsn/utility/factory_store.h>
 #include "replication_app_base.h"
 #include <sstream>
+#include <chrono>
 
 # ifdef __TITLE__
 # undef __TITLE__

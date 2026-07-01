@@ -41,6 +41,9 @@
 # include <dsn/cpp/zlocks.h>
 
 # include <fstream>
+# include <string>
+# include <vector>
+# include <map>
 
 namespace dsn { namespace replication { namespace test {
 

@@ -27,6 +27,7 @@
 # include <dsn/dist/replication.h>
 # include "simple_kv.code.definition.h"
 # include <iostream>
+# include <chrono>
 #include "case.h"
 
 namespace dsn { namespace replication { namespace test { 

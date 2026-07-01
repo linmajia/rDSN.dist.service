@@ -34,6 +34,8 @@
  */
 
 #include "replication_admission_controller.h"
+#include <string>
+#include <vector>
 
 # ifdef __TITLE__
 # undef __TITLE__

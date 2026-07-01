@@ -42,6 +42,8 @@
 # include <cctype>
 # include <fstream>
 # include <future>
+# include <cstring>
+# include <chrono>
 
 # if defined(__linux__)
 # include <sys/prctl.h>

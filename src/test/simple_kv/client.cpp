@@ -38,6 +38,7 @@
 # include <dsn/dist/replication/replication_other_types.h>
 
 # include <sstream>
+# include <chrono>
 
 # ifdef __TITLE__
 # undef __TITLE__
