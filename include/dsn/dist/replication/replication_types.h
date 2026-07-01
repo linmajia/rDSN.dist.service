@@ -9,6 +9,7 @@
 
 #include <dsn/cpp/serialization_helper/dsn.layer2_types.h>
 #include <iosfwd>
+#include <cstdint>
 
 #include <thrift/Thrift.h>
 #include <thrift/TApplicationException.h>

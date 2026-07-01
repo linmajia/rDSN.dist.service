@@ -36,6 +36,8 @@
 # include <gtest/gtest.h>
 # include <chrono>
 # include <condition_variable>
+# include <cstring>
+# include <cstdint>
 
 using namespace ::dsn;
 using namespace ::dsn::replication;

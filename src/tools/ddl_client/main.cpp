@@ -2,6 +2,7 @@
 
 #include <dsn/cpp/utils.h>
 #include <iostream>
+#include <cstring>
 
 using namespace dsn;
 using namespace dsn::replication;

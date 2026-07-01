@@ -46,6 +46,7 @@
 # include <dsn/dist/replication/replication.codes.h>
 # include <dsn/cpp/perf_counter_.h>
 # include <atomic>
+# include <cstring>
 
 namespace dsn { namespace replication {
 

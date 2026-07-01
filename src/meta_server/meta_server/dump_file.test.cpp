@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 #include <dump_file.h>
+#include <cstring>
+#include <cstdint>
+#include <cstdio>
+#include <memory>
 
 TEST(dump_file, read_write)
 {

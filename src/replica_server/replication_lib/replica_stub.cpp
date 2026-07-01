@@ -44,6 +44,8 @@
 #include <sstream>
 #include <vector>
 #include <deque>
+#include <cstring>
+#include <utility>
 
 # ifdef __TITLE__
 # undef __TITLE__

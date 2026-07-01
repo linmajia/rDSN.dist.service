@@ -35,6 +35,10 @@
 # include "mutation_log.h"
 # include <gtest/gtest.h>
 # include <cstdio>
+# include <cstring>
+# include <cstdint>
+# include <memory>
+# include <functional>
 
 using namespace ::dsn;
 using namespace ::dsn::replication;

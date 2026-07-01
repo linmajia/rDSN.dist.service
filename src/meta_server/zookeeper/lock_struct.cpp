@@ -36,6 +36,9 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <cstdint>
+#include <utility>
+#include <cctype>
 
 #include "distributed_lock_service_zookeeper.h"
 #include "lock_struct.h"

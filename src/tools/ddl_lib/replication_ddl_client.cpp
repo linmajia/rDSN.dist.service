@@ -37,6 +37,7 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <cstring>
 
 namespace dsn{ namespace replication{
 

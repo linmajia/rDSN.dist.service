@@ -44,6 +44,9 @@
 # include "replication_common.h"
 # include <dsn/cpp/perf_counter_.h>
 # include <dsn/dist/failure_detector_multimaster.h>
+# include <memory>
+# include <functional>
+# include <utility>
 
 namespace dsn { namespace replication {
 

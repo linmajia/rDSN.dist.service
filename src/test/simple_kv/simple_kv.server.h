@@ -27,6 +27,7 @@
 
 # include "simple_kv.code.definition.h"
 # include <iostream>
+# include <cstdint>
 
 namespace dsn { namespace replication { namespace test { 
 class simple_kv_service 

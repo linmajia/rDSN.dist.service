@@ -36,6 +36,7 @@
 # pragma once
 
 # include "mutation.h"
+# include <cstdint>
 
 namespace dsn { namespace replication {
 

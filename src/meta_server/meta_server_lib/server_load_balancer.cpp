@@ -1,4 +1,5 @@
 #include "server_load_balancer.h"
+#include <memory>
 
 # ifdef __TITLE__
 # undef __TITLE__

@@ -34,6 +34,8 @@
  */
 
 #include <dsn/dist/failure_detector_multimaster.h>
+#include <functional>
+#include <utility>
 
 # ifdef __TITLE__
 # undef __TITLE__

@@ -35,6 +35,9 @@
 
 # include "distributed_lock_service_simple.h"
 # include "replication_common.h"
+# include <cstdint>
+# include <functional>
+# include <utility>
 
 namespace dsn
 {

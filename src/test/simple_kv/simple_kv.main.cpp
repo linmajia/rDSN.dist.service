@@ -38,6 +38,7 @@
 # include "case.h"
 # include "client.h"
 # include "simple_kv.server.impl.h"
+# include <cstdlib>
 
 # ifdef __TITLE__
 # undef __TITLE__

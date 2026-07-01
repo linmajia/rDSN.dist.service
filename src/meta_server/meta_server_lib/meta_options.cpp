@@ -33,6 +33,7 @@
  *     xxxx-xx-xx, author, fix bug about xxx
  */
 #include "meta_options.h"
+#include <cstddef>
 
 namespace dsn { namespace replication {
 

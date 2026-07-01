@@ -34,6 +34,9 @@
  */
 
 #include <algorithm>
+#include <memory>
+#include <utility>
+#include <climits>
 #include "greedy_load_balancer.h"
 
 # ifdef __TITLE__

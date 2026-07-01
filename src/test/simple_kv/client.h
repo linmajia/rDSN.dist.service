@@ -36,6 +36,7 @@
 # pragma once
 
 # include "simple_kv.client.h"
+# include <memory>
 
 namespace dsn { namespace replication { namespace test {
 

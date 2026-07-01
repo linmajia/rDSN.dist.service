@@ -36,6 +36,7 @@
 #pragma once
 
 #include "mutation_cache.h"
+#include <functional>
 
 namespace dsn { namespace replication {
 

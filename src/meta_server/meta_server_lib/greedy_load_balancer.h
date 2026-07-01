@@ -35,6 +35,7 @@
 # pragma once
 
 # include <functional>
+# include <memory>
 # include "server_load_balancer.h"
 
 namespace dsn { namespace replication {

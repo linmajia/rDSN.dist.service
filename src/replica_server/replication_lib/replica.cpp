@@ -39,6 +39,7 @@
 #include "replica_stub.h"
 #include <dsn/cpp/json_helper.h>
 #include "replication_app_base.h"
+#include <cstring>
 
 # ifdef __TITLE__
 # undef __TITLE__

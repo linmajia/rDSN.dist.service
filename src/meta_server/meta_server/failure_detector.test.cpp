@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 #include <dsn/service_api_cpp.h>
 #include <vector>
+#include <cstring>
 
 #ifdef __TITLE__
 #undef __TITLE__

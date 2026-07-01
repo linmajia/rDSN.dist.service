@@ -45,6 +45,7 @@
 # include "meta_server_failure_detector.h"
 # include "server_state.h"
 # include "mutation_log.h"
+# include <cstring>
 
 # ifdef __TITLE__
 # undef __TITLE__

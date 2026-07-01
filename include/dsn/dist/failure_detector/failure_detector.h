@@ -58,6 +58,7 @@
 
 # include <dsn/dist/failure_detector/fd.client.h>
 # include <dsn/dist/failure_detector/fd.server.h>
+# include <cstdint>
 
 namespace dsn { namespace fd {
 

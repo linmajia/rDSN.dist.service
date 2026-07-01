@@ -40,6 +40,7 @@
 # include <cinttypes>
 # include <string>
 # include <exception>
+# include <cstring>
 
 # include "meta_service.h"
 # include "server_state.h"

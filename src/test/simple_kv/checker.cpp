@@ -47,6 +47,7 @@
 # include "../../common/replication_ds.h"
 
 # include <sstream>
+# include <cstring>
 
 # include <dsn/tool_api.h>
 

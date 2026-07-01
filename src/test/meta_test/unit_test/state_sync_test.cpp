@@ -2,6 +2,7 @@
 #include <fstream>
 #include <vector>
 #include <iostream>
+#include <cstring>
 
 #include <gtest/gtest.h>
 #include <dsn/service_api_cpp.h>

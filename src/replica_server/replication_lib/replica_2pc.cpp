@@ -39,6 +39,9 @@
 #include "replica_stub.h"
 #include "replication_app_base.h"
 #include <exception>
+#include <cstdint>
+#include <functional>
+#include <utility>
 
 # ifdef __TITLE__
 # undef __TITLE__

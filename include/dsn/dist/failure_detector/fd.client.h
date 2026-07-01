@@ -36,6 +36,8 @@
 # pragma once
 # include "fd.code.definition.h"
 # include <iostream>
+# include <cstdint>
+# include <utility>
 
 
 namespace dsn { namespace fd {

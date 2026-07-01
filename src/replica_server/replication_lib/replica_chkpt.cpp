@@ -38,6 +38,8 @@
 #include "mutation_log.h"
 #include "replica_stub.h"
 #include "replication_app_base.h"
+#include <memory>
+#include <utility>
 
 # ifdef __TITLE__
 # undef __TITLE__
