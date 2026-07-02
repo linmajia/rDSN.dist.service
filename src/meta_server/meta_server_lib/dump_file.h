@@ -83,10 +83,13 @@ public:
             // (e.g. ENOSPC) can surface here. There is no way to propagate it
             // out of a destructor, so at least make it visible instead of
             // silently losing the tail of the dump. Callers that need to know
-            // the dump succeeded must call flush() and check its result before
-            // destroying this object.
+            // the dump succeeded must call close() and check its result before
+            // destroying this object (this destructor is only a best-effort
+            // fallback for the read path or an abandoned write).
             if (fclose(_file_handle) != 0 && _is_write)
+            {
                 derror("close dump file %s failed, the dump may be incomplete", _filename.c_str());
+            }
         }
     }
 
@@ -153,6 +156,45 @@ public:
         if (_file_handle != nullptr && fflush(_file_handle) != 0)
         {
             log_error_and_return(msg_buffer, 128);
+        }
+        return 0;
+    }
+    // Flush any buffered data and close the file, surfacing a write-back error
+    // (e.g. ENOSPC/EIO) that C stdio may report only at fflush or fclose time.
+    // Returns 0 on success and -1 on error. After this call the handle is
+    // released, so the destructor will not close it again. Callers that need to
+    // know the dump is complete must call this (not just flush()) and check the
+    // result before treating the dump as successful, because the destructor's
+    // fclose cannot propagate an error out.
+    int close()
+    {
+        static __thread char msg_buffer[128];
+
+        if (_file_handle == nullptr)
+        {
+            return 0;
+        }
+
+        int saved_errno = 0;
+        if (_is_write && fflush(_file_handle) != 0)
+        {
+            saved_errno = errno;
+        }
+        // fclose flushes again and releases the handle; a delayed write-back
+        // error can surface only here, so its result must be checked too. Always
+        // call it (even after a failed fflush) so the handle is not leaked.
+        if (fclose(_file_handle) != 0 && saved_errno == 0)
+        {
+            saved_errno = errno;
+        }
+        _file_handle = nullptr;
+
+        if (saved_errno != 0 && _is_write)
+        {
+            error_msg(saved_errno, msg_buffer, 128);
+            derror("close dump file %s failed, the dump may be incomplete, reason(%s)",
+                   _filename.c_str(), msg_buffer);
+            return -1;
         }
         return 0;
     }

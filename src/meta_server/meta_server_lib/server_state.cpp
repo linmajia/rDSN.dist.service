@@ -166,10 +166,11 @@ error_code server_state::dump_app_states(const char* local_path, const std::func
         return ERR_FILE_OPERATION_FAILED;
     }
 
-    // append_buffer/flush return -1 when the underlying write fails (e.g. the
-    // disk is full or hits an I/O error). Those errors must abort the dump and
-    // be reported to the caller; otherwise a truncated/corrupt dump would be
-    // silently reported as a success and later fail to restore.
+    // append_buffer returns -1 when the underlying write fails (e.g. the disk is
+    // full or hits an I/O error), and close() (below) reports a flush/close-time
+    // write-back error. Those errors must abort the dump and be reported to the
+    // caller; otherwise a truncated/corrupt dump would be silently reported as a
+    // success and later fail to restore.
     if (file->append_buffer("binary", 6) != 0) {
         derror("dump to file(%s) failed: cannot write format header", local_path);
         return ERR_FILE_OPERATION_FAILED;
@@ -195,8 +196,14 @@ error_code server_state::dump_app_states(const char* local_path, const std::func
             }
         }
     }
-    if (file->flush() != 0) {
-        derror("dump to file(%s) failed: cannot flush buffered data", local_path);
+    // close() flushes remaining buffered data and closes the file, reporting a
+    // write-back error (disk full / I/O) that stdio may surface only at flush or
+    // close time. It must be checked here, before returning success: relying on
+    // the destructor's fclose would surface such an error only after this
+    // function had already returned ERR_OK, i.e. a truncated dump reported as a
+    // successful one.
+    if (file->close() != 0) {
+        derror("dump to file(%s) failed: cannot flush/close the dump file", local_path);
         return ERR_FILE_OPERATION_FAILED;
     }
     return ERR_OK;
