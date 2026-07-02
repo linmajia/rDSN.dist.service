@@ -123,7 +123,18 @@ int zookeeper_session::attach(
             nullptr,
             this,
             0);
-        dassert(_handle != nullptr, "zookeeper session init failed");
+        if (nullptr == _handle)
+        {
+            // zookeeper_init() returns null on a bad hosts string or when an
+            // allocation inside the ZooKeeper C client fails (e.g. under memory
+            // pressure). Report a non-connected session state instead of
+            // aborting the whole meta server: both callers
+            // (meta_state_service_zookeeper / distributed_lock_service_zookeeper
+            // initialize()) already treat a non-ZOO_CONNECTED_STATE result as a
+            // graceful ERR_TIMEOUT startup failure.
+            derror("zookeeper_init failed, hosts(%s)", zookeeper_session_mgr::instance().zoo_hosts());
+            return ZOO_EXPIRED_SESSION_STATE;
+        }
     }
 
     _watchers.push_back(watcher_object());

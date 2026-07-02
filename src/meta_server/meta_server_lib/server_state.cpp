@@ -811,19 +811,20 @@ void server_state::init_app_partition_node(std::shared_ptr<app_state>& app, int 
         {
             inc_creating_app_available_partitions(app);
         }
-        else if (ERR_TIMEOUT == ec)
+        else
         {
-            dwarn("create partition node failed, gpid(%d.%d), retry later", app->app_id, pidx);
+            // Any other remote-storage error is recoverable by retrying this
+            // idempotent create-node. ERR_TIMEOUT (connection loss / operation
+            // timeout / session expiry) and ERR_ZOOKEEPER_OPERATION (e.g. a
+            // marshalling failure under memory pressure) must not abort the
+            // whole meta server.
+            dwarn("create partition node failed, gpid(%d.%d), err(%s), retry later", app->app_id, pidx, ec.to_string());
             //TODO: add parameter of the retry time interval in config file
             tasking::enqueue(LPC_META_STATE_HIGH,
                              nullptr,
                              std::bind(&server_state::init_app_partition_node, this, app, pidx),
                              0,
                              std::chrono::milliseconds(1000));
-        }
-        else
-        {
-            dassert(false, "we can't handle this error in init app partition nodes err(%s), gpid(%d.%d)", ec.to_string(), app->app_id, pidx);
         }
     };
 
@@ -853,15 +854,16 @@ void server_state::do_app_create(std::shared_ptr<app_state>& app, dsn_message_t 
                 init_app_partition_node(app, i);
             }
         }
-        else if (ERR_TIMEOUT == ec)
-        {
-            dwarn("the storage service is not available currently, continue to create later");
-            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_create, this, app, msg),
-                             0, std::chrono::seconds(1));
-        }
         else
         {
-            dassert(false, "we can't handle this right now, err(%s)", ec.to_string());
+            // The remote storage is temporarily unavailable (ERR_TIMEOUT) or the
+            // operation failed with another recoverable error such as
+            // ERR_ZOOKEEPER_OPERATION (e.g. a marshalling failure under memory
+            // pressure). Retry instead of aborting the whole meta server; the
+            // create is idempotent (ERR_NODE_ALREADY_EXIST is treated as success).
+            dwarn("create app on storage service failed, name: %s, err(%s), continue to create later", app->app_name.c_str(), ec.to_string());
+            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_create, this, app, msg),
+                             0, std::chrono::seconds(1));
         }
     };
 
@@ -1013,15 +1015,15 @@ void server_state::do_app_drop(std::shared_ptr<app_state>& app, dsn_message_t ms
             dsn_msg_release_ref(msg);
             dinfo("drop table(id:%d, name:%s) finished", app->app_id, app->app_name.c_str());
         }
-        else if (ERR_TIMEOUT == ec)
-        {
-            dinfo("drop table(id:%d, name:%s) timeout, continue to drop later", app->app_id, app->app_name.c_str());
-            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_drop, this, app, msg),
-                             0, std::chrono::seconds(1));
-        }
         else
         {
-            dassert(false, "we can't handle this, error(%s)", ec.to_string());
+            // ERR_TIMEOUT or any other recoverable remote-storage error (e.g.
+            // ERR_ZOOKEEPER_OPERATION from a marshalling failure under memory
+            // pressure): retry the idempotent set-data instead of aborting the
+            // whole meta server.
+            dwarn("drop table(id:%d, name:%s) failed, err(%s), continue to drop later", app->app_id, app->app_name.c_str(), ec.to_string());
+            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_drop, this, app, msg),
+                             0, std::chrono::seconds(1));
         }
     };
     _meta_svc->get_remote_storage()->set_data(app_path,
@@ -1291,7 +1293,17 @@ void server_state::on_update_configuration_on_remote_reply(error_code ec, std::s
     }
     else
     {
-        dassert(false, "we can't handle this right now, err = %s", ec.to_string());
+        // ERR_ZOOKEEPER_OPERATION (e.g. a marshalling failure under memory
+        // pressure) or any other recoverable remote-storage error: retry the
+        // idempotent set-data instead of aborting the whole meta server, the
+        // same way ERR_TIMEOUT is handled above.
+        dwarn("update configuration on remote storage failed, gpid(%d.%d), err(%s), retry later",
+              gpid.get_app_id(), gpid.get_partition_index(), ec.to_string());
+        cc.pending_sync_task = tasking::enqueue(LPC_META_STATE_HIGH, nullptr, [this, config_request, &cc] () mutable
+        {
+            cc.pending_sync_task = update_configuration_on_remote(config_request);
+        },
+        0, std::chrono::seconds(1));
     }
 }
 
