@@ -41,6 +41,7 @@
 #include <cerrno>
 #include <iostream>
 #include <exception>
+#include <cinttypes>
 
 inline void error_msg(int err_number, /*out*/char* buffer, int buflen)
 {
@@ -240,7 +241,8 @@ public:
             {
                 if ( feof(_file_handle) )
                 {
-                    derror("unexpected file end, start offset of this block (%ld)", (long)(ftell(_file_handle)-len-sizeof(hdr)));
+                    derror("unexpected file end, start offset of this block (%" PRId64 ")",
+                           static_cast<int64_t>(ftell(_file_handle)) - static_cast<int64_t>(len) - static_cast<int64_t>(sizeof(hdr)));
                     return -1;
                 }
                 else if (errno != EINTR)
@@ -253,7 +255,8 @@ public:
         _crc = dsn_crc32_compute(raw_mem, len, _crc);
         if (_crc != hdr.crc32)
         {
-            derror("file %s data error, block offset(%ld)", _filename.c_str(), ftell(_file_handle)-hdr.length-sizeof(hdr));
+            derror("file %s data error, block offset(%" PRId64 ")", _filename.c_str(),
+                   static_cast<int64_t>(ftell(_file_handle)) - static_cast<int64_t>(hdr.length) - static_cast<int64_t>(sizeof(hdr)));
             return -1;
         }
 

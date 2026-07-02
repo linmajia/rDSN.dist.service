@@ -43,6 +43,7 @@
 #include "server_load_balancer.h"
 #include <chrono>
 #include <thread>
+#include <cinttypes>
 
 #ifdef __TITLE__
 #undef __TITLE__
@@ -558,7 +559,8 @@ void meta_service::on_control_meta(dsn_message_t req)
         reply(req, response);
         return;
     }
-    ddebug("get control meta rpc, flags(%lx), type(%d), current flags(%lx)", request.ctrl_flags, request.ctrl_type, _meta_ctrl_flags);
+    ddebug("get control meta rpc, flags(%" PRIx64 "), type(%d), current flags(%" PRIx64 ")",
+           static_cast<uint64_t>(request.ctrl_flags), request.ctrl_type, static_cast<uint64_t>(_meta_ctrl_flags));
     {
         zauto_write_lock l(_meta_lock);
         switch (request.ctrl_type)
