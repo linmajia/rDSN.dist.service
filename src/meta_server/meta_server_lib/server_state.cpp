@@ -166,21 +166,45 @@ error_code server_state::dump_app_states(const char* local_path, const std::func
         return ERR_FILE_OPERATION_FAILED;
     }
 
-    file->append_buffer("binary", 6);
+    // append_buffer returns -1 when the underlying write fails (e.g. the disk is
+    // full or hits an I/O error), and close() (below) reports a flush/close-time
+    // write-back error. Those errors must abort the dump and be reported to the
+    // caller; otherwise a truncated/corrupt dump would be silently reported as a
+    // success and later fail to restore.
+    if (file->append_buffer("binary", 6) != 0) {
+        derror("dump to file(%s) failed: cannot write format header", local_path);
+        return ERR_FILE_OPERATION_FAILED;
+    }
     app_state* app;
     while ( (app = iterator())!=nullptr)
     {
         dassert(app->status==app_status::AS_AVAILABLE || app->status==app_status::AS_DROPPED, "invalid app status");
         binary_writer writer;
         dsn::marshall(writer, *app, DSF_THRIFT_BINARY);
-        file->append_buffer(writer.get_buffer());
+        if (file->append_buffer(writer.get_buffer()) != 0) {
+            derror("dump to file(%s) failed: cannot write state of app(%s)", local_path, app->app_name.c_str());
+            return ERR_FILE_OPERATION_FAILED;
+        }
         if (app_status::AS_AVAILABLE == app->status) {
             for (const partition_configuration& pc: app->partitions) {
                 binary_writer writer;
                 dsn::marshall(writer, pc, DSF_THRIFT_BINARY);
-                file->append_buffer(writer.get_buffer());
+                if (file->append_buffer(writer.get_buffer()) != 0) {
+                    derror("dump to file(%s) failed: cannot write a partition config of app(%s)", local_path, app->app_name.c_str());
+                    return ERR_FILE_OPERATION_FAILED;
+                }
             }
         }
+    }
+    // close() flushes remaining buffered data and closes the file, reporting a
+    // write-back error (disk full / I/O) that stdio may surface only at flush or
+    // close time. It must be checked here, before returning success: relying on
+    // the destructor's fclose would surface such an error only after this
+    // function had already returned ERR_OK, i.e. a truncated dump reported as a
+    // successful one.
+    if (file->close() != 0) {
+        derror("dump to file(%s) failed: cannot flush/close the dump file", local_path);
+        return ERR_FILE_OPERATION_FAILED;
     }
     return ERR_OK;
 }
@@ -460,9 +484,18 @@ dsn::error_code server_state::sync_apps_from_remote_storage()
                 if (ec == ERR_OK)
                 {
                     partition_configuration pc;
-                    dsn::json::string_tokenizer tokenizer(value);
-                    json_decode(tokenizer, pc);
-                    dassert(pc.pid.get_app_id() == app->app_id && pc.pid.get_partition_index() == partition_id, "invalid partition config");
+                    if (!dsn::json::json_forwarder<partition_configuration>::decode(value, pc))
+                    {
+                        derror("invalid partition json data from remote storage, path = %s", partition_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
+                    if (pc.pid.get_app_id() != app->app_id || pc.pid.get_partition_index() != partition_id)
+                    {
+                        derror("invalid partition config from remote storage, path = %s", partition_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
                     {
                         zauto_write_lock l(_lock);
                         app->partitions[partition_id] = pc;
@@ -492,9 +525,42 @@ dsn::error_code server_state::sync_apps_from_remote_storage()
                 if (ec == ERR_OK)
                 {
                     app_info info;
-                    dassert(dsn::json::json_forwarder<app_info>::decode(value, info), "invalid json data");
-                    dassert(info.status==app_status::AS_AVAILABLE || info.status==app_status::AS_DROPPED, "invalid app status in remote storage");
-                    std::shared_ptr<app_state> app = app_state::create(info);
+                    if (!dsn::json::json_forwarder<app_info>::decode(value, info))
+                    {
+                        derror("invalid app json data from remote storage, path = %s", app_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
+                    if (info.status != app_status::AS_AVAILABLE && info.status != app_status::AS_DROPPED)
+                    {
+                        derror("invalid app status in remote storage, path = %s", app_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
+                    if (info.partition_count <= 0)
+                    {
+                        derror("invalid partition_count(%d) in remote storage, path = %s",
+                            info.partition_count, app_path.c_str());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
+                    std::shared_ptr<app_state> app;
+                    try
+                    {
+                        // partition_count comes from (semi-untrusted) remote storage;
+                        // a corrupt huge/negative value makes app_state allocate its
+                        // partition vector and throw std::bad_alloc/std::length_error.
+                        // Report it as invalid data instead of aborting the meta server.
+                        app = app_state::create(info);
+                    }
+                    catch (const std::exception& ex)
+                    {
+                        derror("invalid app(%s) in remote storage: cannot allocate %d "
+                               "partitions, err: %s", info.app_name.c_str(),
+                               info.partition_count, ex.what());
+                        err = ERR_INVALID_DATA;
+                        return;
+                    }
                     {
                         zauto_write_lock l(_lock);
                         _all_apps.emplace(app->app_id, app);
@@ -745,19 +811,25 @@ void server_state::init_app_partition_node(std::shared_ptr<app_state>& app, int 
         {
             inc_creating_app_available_partitions(app);
         }
-        else if (ERR_TIMEOUT == ec)
+        else if (ERR_OBJECT_NOT_FOUND == ec || ERR_INVALID_PARAMETERS == ec || ERR_INCONSISTENT_STATE == ec)
         {
-            dwarn("create partition node failed, gpid(%d.%d), retry later", app->app_id, pidx);
+            // Permanent remote-storage errors: retrying the same create-node can
+            // never succeed, so fail-stop instead of looping forever.
+            dassert(false, "we can't handle this error in init app partition nodes err(%s), gpid(%d.%d)", ec.to_string(), app->app_id, pidx);
+        }
+        else
+        {
+            // Transient remote-storage error -- ERR_TIMEOUT (connection loss /
+            // operation timeout / session expiry) or ERR_ZOOKEEPER_OPERATION
+            // (e.g. a marshalling failure under memory pressure): retry this
+            // idempotent create-node instead of aborting the whole meta server.
+            dwarn("create partition node failed, gpid(%d.%d), err(%s), retry later", app->app_id, pidx, ec.to_string());
             //TODO: add parameter of the retry time interval in config file
             tasking::enqueue(LPC_META_STATE_HIGH,
                              nullptr,
                              std::bind(&server_state::init_app_partition_node, this, app, pidx),
                              0,
                              std::chrono::milliseconds(1000));
-        }
-        else
-        {
-            dassert(false, "we can't handle this error in init app partition nodes err(%s), gpid(%d.%d)", ec.to_string(), app->app_id, pidx);
         }
     };
 
@@ -787,15 +859,22 @@ void server_state::do_app_create(std::shared_ptr<app_state>& app, dsn_message_t 
                 init_app_partition_node(app, i);
             }
         }
-        else if (ERR_TIMEOUT == ec)
+        else if (ERR_OBJECT_NOT_FOUND == ec || ERR_INVALID_PARAMETERS == ec || ERR_INCONSISTENT_STATE == ec)
         {
-            dwarn("the storage service is not available currently, continue to create later");
-            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_create, this, app, msg),
-                             0, std::chrono::seconds(1));
+            // Permanent remote-storage errors: retrying the same create-node can
+            // never succeed, so fail-stop instead of looping forever.
+            dassert(false, "we can't handle this right now, err(%s)", ec.to_string());
         }
         else
         {
-            dassert(false, "we can't handle this right now, err(%s)", ec.to_string());
+            // Transient remote-storage error -- the storage is temporarily
+            // unavailable (ERR_TIMEOUT) or failed with ERR_ZOOKEEPER_OPERATION
+            // (e.g. a marshalling failure under memory pressure). Retry instead of
+            // aborting the whole meta server; the create is idempotent
+            // (ERR_NODE_ALREADY_EXIST is treated as success).
+            dwarn("create app on storage service failed, name: %s, err(%s), continue to create later", app->app_name.c_str(), ec.to_string());
+            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_create, this, app, msg),
+                             0, std::chrono::seconds(1));
         }
     };
 
@@ -826,6 +905,19 @@ void server_state::create_app(dsn_message_t msg)
     }
     
     ddebug("create app request, name(%s), type(%s)", request.app_name.c_str(), request.options.app_type.c_str());
+
+    // partition_count is a client-supplied value; a non-positive value would create
+    // a nonsensical app, so reject it here with a clear error (a huge value is guarded
+    // separately below when app_state allocates its partition vector).
+    if (request.options.partition_count <= 0)
+    {
+        derror("create app(%s) failed: invalid partition_count %d",
+            request.app_name.c_str(), request.options.partition_count);
+        response.err = ERR_INVALID_PARAMETERS;
+        reply_message(_meta_svc, msg, response);
+        dsn_msg_release_ref(msg);
+        return;
+    }
 
     auto option_match_check = [](const create_app_options& opt, const app_state& exist_app)
     {
@@ -859,8 +951,6 @@ void server_state::create_app(dsn_message_t msg)
             }
         }
         else {
-            will_create_app = true;
-
             app_info info;
             info.app_id = next_app_id();
             info.app_name = request.app_name;
@@ -871,10 +961,27 @@ void server_state::create_app(dsn_message_t msg)
             info.partition_count = request.options.partition_count;
             info.status = app_status::AS_CREATING;
 
-            app = app_state::create(info);
-            _all_apps.emplace(app->app_id, app);
-            _exist_apps.emplace(request.app_name, app);
-            ++_creating_apps_count;
+            try
+            {
+                // partition_count is an untrusted, client-supplied value; a very
+                // large value makes app_state's partitions.assign(partition_count,
+                // ...) throw std::bad_alloc/std::length_error. Reject the request
+                // with an error instead of aborting the whole meta server.
+                app = app_state::create(info);
+            }
+            catch (const std::exception& ex)
+            {
+                derror("create app(%s) failed: cannot allocate %d partitions, err: %s",
+                    request.app_name.c_str(), request.options.partition_count, ex.what());
+                response.err = ERR_INVALID_PARAMETERS;
+            }
+            if (app != nullptr)
+            {
+                will_create_app = true;
+                _all_apps.emplace(app->app_id, app);
+                _exist_apps.emplace(request.app_name, app);
+                ++_creating_apps_count;
+            }
         }
     }
 
@@ -919,15 +1026,21 @@ void server_state::do_app_drop(std::shared_ptr<app_state>& app, dsn_message_t ms
             dsn_msg_release_ref(msg);
             dinfo("drop table(id:%d, name:%s) finished", app->app_id, app->app_name.c_str());
         }
-        else if (ERR_TIMEOUT == ec)
+        else if (ERR_OBJECT_NOT_FOUND == ec || ERR_INVALID_PARAMETERS == ec || ERR_INCONSISTENT_STATE == ec)
         {
-            dinfo("drop table(id:%d, name:%s) timeout, continue to drop later", app->app_id, app->app_name.c_str());
-            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_drop, this, app, msg),
-                             0, std::chrono::seconds(1));
+            // Permanent remote-storage errors: retrying the same set-data can
+            // never succeed, so fail-stop instead of looping forever.
+            dassert(false, "we can't handle this, error(%s)", ec.to_string());
         }
         else
         {
-            dassert(false, "we can't handle this, error(%s)", ec.to_string());
+            // Transient remote-storage error -- ERR_TIMEOUT or
+            // ERR_ZOOKEEPER_OPERATION (e.g. a marshalling failure under memory
+            // pressure): retry the idempotent set-data instead of aborting the
+            // whole meta server.
+            dwarn("drop table(id:%d, name:%s) failed, err(%s), continue to drop later", app->app_id, app->app_name.c_str(), ec.to_string());
+            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_drop, this, app, msg),
+                             0, std::chrono::seconds(1));
         }
     };
     _meta_svc->get_remote_storage()->set_data(app_path,
@@ -1195,9 +1308,26 @@ void server_state::on_update_configuration_on_remote_reply(error_code ec, std::s
             send_proposal(action.target, *config_request);
         }
     }
+    else if (ERR_OBJECT_NOT_FOUND == ec || ERR_INVALID_PARAMETERS == ec || ERR_INCONSISTENT_STATE == ec)
+    {
+        // Permanent remote-storage errors: retrying the same set_data can never
+        // succeed (e.g. the partition znode is missing or the request is
+        // malformed), so fail-stop instead of leaving the partition pending
+        // forever.
+        dassert(false, "we can't handle this right now, err = %s", ec.to_string());
+    }
     else
     {
-        dassert(false, "we can't handle this right now, err = %s", ec.to_string());
+        // Transient remote-storage error such as ERR_ZOOKEEPER_OPERATION (e.g. a
+        // marshalling failure under memory pressure): retry the idempotent
+        // set_data, the same way ERR_TIMEOUT is handled above.
+        dwarn("update configuration on remote storage failed, gpid(%d.%d), err(%s), retry later",
+              gpid.get_app_id(), gpid.get_partition_index(), ec.to_string());
+        cc.pending_sync_task = tasking::enqueue(LPC_META_STATE_HIGH, nullptr, [this, config_request, &cc] () mutable
+        {
+            cc.pending_sync_task = update_configuration_on_remote(config_request);
+        },
+        0, std::chrono::seconds(1));
     }
 }
 

@@ -145,6 +145,25 @@ void meta_service_test_app::state_sync_test()
 
     opt.meta_state_service_type = "meta_state_service_zookeeper";
     svc->remote_storage_initialize();
+
+    // clean up any stale state left under apps_root by a previous aborted run.
+    // restore_from_local_storage() -> sync_apps_to_remote_storage() only creates
+    // nodes (ERR_NODE_ALREADY_EXIST is treated as success and never overwrites),
+    // so leftover app/partition nodes would be read back instead of the restored
+    // ones and the sync-back comparison below would fail.
+    {
+        dsn::error_code ec;
+        dsn::dist::meta_state_service* storage = svc->get_remote_storage();
+        storage->delete_node(
+            apps_root,
+            true,
+            LPC_META_CALLBACK,
+            [&ec](dsn::error_code error) { ec = error; },
+            nullptr
+        )->wait();
+        ASSERT_TRUE(ec == dsn::ERR_OK || ec == dsn::ERR_OBJECT_NOT_FOUND);
+    }
+
     std::cerr << "test sync to zookeeper's remote storage" << std::endl;
     // restore from the local file, and restore to zookeeper
     {

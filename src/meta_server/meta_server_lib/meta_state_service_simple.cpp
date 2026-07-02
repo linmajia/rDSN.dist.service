@@ -41,6 +41,8 @@
 # include <stack>
 # include <utility>
 # include <cstring>
+# include <limits>
+# include <exception>
 
 namespace dsn
 {
@@ -292,7 +294,34 @@ namespace dsn
                         {
                             break;
                         }
-                        std::shared_ptr<char> buffer(dsn::make_shared_array<char>(header.size));
+                        // header.size is read from a possibly corrupt/truncated on-disk log; a garbage
+                        // value must not drive an unbounded allocation (bad_alloc -> process abort) nor
+                        // overflow the (int) blob length below. Treat an implausible size like a torn
+                        // tail record: stop replay and keep what was replayed so far. This does not change
+                        // the deliberate fail-stop on a structurally-complete but semantically-corrupt
+                        // record (the default case below).
+                        if (header.size > static_cast<size_t>(std::numeric_limits<int>::max()))
+                        {
+                            derror("meta state log %s has an invalid record size %llu at offset %llu, stop replay",
+                                   log_path.c_str(),
+                                   static_cast<unsigned long long>(header.size),
+                                   static_cast<unsigned long long>(_offset));
+                            break;
+                        }
+                        std::shared_ptr<char> buffer;
+                        try
+                        {
+                            buffer = dsn::make_shared_array<char>(header.size);
+                        }
+                        catch (const std::exception& ex)
+                        {
+                            derror("meta state log %s failed to allocate %llu bytes for a record at offset %llu, err: %s, stop replay",
+                                   log_path.c_str(),
+                                   static_cast<unsigned long long>(header.size),
+                                   static_cast<unsigned long long>(_offset),
+                                   ex.what());
+                            break;
+                        }
                         if (fread(buffer.get(), header.size, 1, fd) != 1)
                         {
                             break;
@@ -300,7 +329,7 @@ namespace dsn
                         _offset += sizeof(header) + header.size;
                         blob blob_wrapper(buffer, (int)header.size);
                         binary_reader reader(blob_wrapper);
-                        int op_type;
+                        int op_type = -1;
                         reader.read(op_type);
 
                         switch (static_cast<operation_type>(op_type))

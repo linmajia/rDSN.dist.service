@@ -41,6 +41,7 @@
 #include <cerrno>
 #include <iostream>
 #include <exception>
+#include <cinttypes>
 
 inline void error_msg(int err_number, /*out*/char* buffer, int buflen)
 {
@@ -78,7 +79,19 @@ public:
     ~dump_file()
     {
         if (_file_handle != nullptr)
-            fclose(_file_handle);
+        {
+            // In write mode fclose flushes any buffered data, so a disk error
+            // (e.g. ENOSPC) can surface here. There is no way to propagate it
+            // out of a destructor, so at least make it visible instead of
+            // silently losing the tail of the dump. Callers that need to know
+            // the dump succeeded must call close() and check its result before
+            // destroying this object (this destructor is only a best-effort
+            // fallback for the read path or an abandoned write).
+            if (fclose(_file_handle) != 0 && _is_write)
+            {
+                derror("close dump file %s failed, the dump may be incomplete", _filename.c_str());
+            }
+        }
     }
 
     static std::shared_ptr<dump_file> open_file(const char* filename, bool is_write)
@@ -131,6 +144,61 @@ public:
     {
         return append_buffer(data.c_str(), data.size());
     }
+    // Force any buffered data out to the OS and report a write failure that
+    // would otherwise only surface (and be swallowed) at fclose time. Returns
+    // 0 on success and -1 on error. Callers must invoke this after the last
+    // append_buffer and check the result before treating the dump as complete.
+    int flush()
+    {
+        static __thread char msg_buffer[128];
+
+        dassert(_is_write, "call flush when open file with read mode");
+
+        if (_file_handle != nullptr && fflush(_file_handle) != 0)
+        {
+            log_error_and_return(msg_buffer, 128);
+        }
+        return 0;
+    }
+    // Flush any buffered data and close the file, surfacing a write-back error
+    // (e.g. ENOSPC/EIO) that C stdio may report only at fflush or fclose time.
+    // Returns 0 on success and -1 on error. After this call the handle is
+    // released, so the destructor will not close it again. Callers that need to
+    // know the dump is complete must call this (not just flush()) and check the
+    // result before treating the dump as successful, because the destructor's
+    // fclose cannot propagate an error out.
+    int close()
+    {
+        static __thread char msg_buffer[128];
+
+        if (_file_handle == nullptr)
+        {
+            return 0;
+        }
+
+        int saved_errno = 0;
+        if (_is_write && fflush(_file_handle) != 0)
+        {
+            saved_errno = errno;
+        }
+        // fclose flushes again and releases the handle; a delayed write-back
+        // error can surface only here, so its result must be checked too. Always
+        // call it (even after a failed fflush) so the handle is not leaked.
+        if (fclose(_file_handle) != 0 && saved_errno == 0)
+        {
+            saved_errno = errno;
+        }
+        _file_handle = nullptr;
+
+        if (saved_errno != 0 && _is_write)
+        {
+            error_msg(saved_errno, msg_buffer, 128);
+            derror("close dump file %s failed, the dump may be incomplete, reason(%s)",
+                   _filename.c_str(), msg_buffer);
+            return -1;
+        }
+        return 0;
+    }
     int read_next_buffer(/*out*/dsn::blob& output)
     {
         static __thread char msg_buffer[128];
@@ -173,7 +241,8 @@ public:
             {
                 if ( feof(_file_handle) )
                 {
-                    derror("unexpected file end, start offset of this block (%ld)", (long)(ftell(_file_handle)-len-sizeof(hdr)));
+                    derror("unexpected file end, start offset of this block (%" PRId64 ")",
+                           static_cast<int64_t>(ftell(_file_handle)) - static_cast<int64_t>(len) - static_cast<int64_t>(sizeof(hdr)));
                     return -1;
                 }
                 else if (errno != EINTR)
@@ -186,7 +255,8 @@ public:
         _crc = dsn_crc32_compute(raw_mem, len, _crc);
         if (_crc != hdr.crc32)
         {
-            derror("file %s data error, block offset(%ld)", _filename.c_str(), ftell(_file_handle)-hdr.length-sizeof(hdr));
+            derror("file %s data error, block offset(%" PRId64 ")", _filename.c_str(),
+                   static_cast<int64_t>(ftell(_file_handle)) - static_cast<int64_t>(hdr.length) - static_cast<int64_t>(sizeof(hdr)));
             return -1;
         }
 
