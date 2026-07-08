@@ -799,6 +799,51 @@ void mutation_log::close()
     init_states();
 }
 
+void mutation_log::close_on_destroy()
+{
+    {
+        zauto_lock l(_lock);
+        if (!_is_opened)
+        {
+            return;
+        }
+        _is_opened = false;
+    }
+
+    dinfo("close mutation log %s on destroy", dir().c_str());
+
+    // Deliberately do NOT call flush() here. During destruction the derived
+    // vtable may already be gone, so flush() would dispatch to the pure-virtual
+    // mutation_log::flush() and abort ("pure virtual method called"); flush()'s
+    // retry loop can also busy-spin forever if a write left _is_writing stuck
+    // after an allocation failure. Any un-acknowledged pending write is dropped
+    // (best-effort teardown).
+    //
+    // Drain in-flight write-completion tasks by WAITING for them to finish (not
+    // cancelling): their callbacks reference derived members, and the derived
+    // object is still alive here, so letting them run to completion avoids a
+    // use-after-free when the base ~clientlet() later tears the tracker down.
+    // We must not cancel here: cancel_outstanding_tasks() holds the tracker's
+    // per-task OWNER_DELETE_LOCKED flag across dsn_task_cancel(task, true), and
+    // if that cancel drops the task's last reference the resulting
+    // task::~task()->trackable_task::unset_tracker() re-enters and busy-spins
+    // forever waiting for a delete-commit that only runs after cancel returns.
+    // A queued aio write always completes (with an error under fault injection),
+    // so waiting drains promptly instead of hanging.
+    dsn_task_tracker_wait_all(tracker());
+
+    {
+        zauto_lock l(_lock);
+
+        // close current log file
+        if (nullptr != _current_log_file)
+        {
+            _current_log_file->close();
+            _current_log_file = nullptr;
+        }
+    }
+}
+
 error_code mutation_log::create_new_log_file()
 {
     // create file
