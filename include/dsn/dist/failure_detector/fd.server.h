@@ -50,7 +50,7 @@ protected:
     // RPC_FD_FAILURE_DETECTOR_PING
     virtual void on_ping(const beacon_msg& beacon, ::dsn::rpc_replier<beacon_ack>& reply)
     {
-        std::cout << "... exec RPC_FD_FAILURE_DETECTOR_PING ... (not implemented) " << std::endl;
+        dwarn("... exec RPC_FD_FAILURE_DETECTOR_PING ... (not implemented) ");
         beacon_ack resp;
         reply(resp);
     }

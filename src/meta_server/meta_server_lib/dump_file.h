@@ -48,17 +48,22 @@ inline void error_msg(int err_number, /*out*/char* buffer, int buflen)
 #ifdef _WIN32
     int result = strerror_s(buffer, buflen, err_number);
     if (result != 0)
-        fprintf(stderr, "maybe unknown err number(%d)", err_number);
+    {
+        snprintf(buffer, buflen, "maybe unknown err number(%d)", err_number);
+    }
 #else
 #if defined(__GLIBC__) && defined(_GNU_SOURCE)
     char* result = strerror_r(err_number, buffer, buflen);
-    if (result != buffer) {
-        fprintf(stderr, "%s\n", result);
+    if (result != buffer)
+    {
+        snprintf(buffer, buflen, "%s", result);
     }
 #else
     int result = strerror_r(err_number, buffer, buflen);
     if (result != 0)
-        fprintf(stderr, "maybe unknown err number(%d)", err_number);
+    {
+        snprintf(buffer, buflen, "maybe unknown err number(%d)", err_number);
+    }
 #endif
 #endif
 }
