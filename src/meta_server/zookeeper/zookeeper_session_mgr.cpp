@@ -34,6 +34,7 @@
  */
 #include "zookeeper_session_mgr.h"
 #include "zookeeper_session.h"
+#include <dsn/service_api_c.h>
 #include <stdio.h>
 #include <zookeeper.h>
 #include <stdexcept>
@@ -49,9 +50,11 @@ zookeeper_session_mgr::zookeeper_session_mgr()
 # ifndef WIN32
     FILE* fp = fopen(_zoo_logfile.c_str(), "a");
     if (fp != nullptr)
+    {
         zoo_set_log_stream(fp);
+    }
 # else
-    fprintf(stderr, "zoo log stream failure on windows, to be fixed\n");
+    dwarn("zoo log stream redirection on windows is not implemented yet");
 # endif
 }
 
