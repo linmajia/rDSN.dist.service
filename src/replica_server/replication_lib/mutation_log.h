@@ -293,6 +293,18 @@ protected:
     // init memory states
     virtual void init_states();
 
+    // Close the log files during destruction WITHOUT calling the virtual
+    // flush(). Must be invoked from the derived destructors (while the object
+    // is still fully typed). Leaving the close to the base ~mutation_log() would
+    // dispatch close()->flush() to the pure-virtual mutation_log::flush() (the
+    // derived part is already gone) and abort with "pure virtual method called";
+    // flush()'s retry loop can also busy-spin forever when a write left
+    // _is_writing stuck after an allocation failure. This helper only touches
+    // base members, drains in-flight write-completion tasks through the task
+    // tracker (so their callbacks cannot fire after derived members are freed),
+    // and drops any un-acknowledged pending write (best-effort teardown).
+    void close_on_destroy();
+
 private:
     //
     //  internal helpers
@@ -376,6 +388,19 @@ public:
         _force_flush(force_flush)
     {}
 
+    ~mutation_log_shared()
+    {
+        // Tear down without calling the virtual flush(): see close_on_destroy().
+        // A destructor must not throw, so swallow any exception it may raise.
+        try
+        {
+            close_on_destroy();
+        }
+        catch (...)
+        {
+        }
+    }
+
     virtual ::dsn::task_ptr append(mutation_ptr& mu,
         dsn_task_code_t callback_code,
         clientlet* callback_host,
@@ -422,6 +447,19 @@ public:
         _batch_buffer_max_count(batch_buffer_max_count)
     {
         mutation_log_private::init_states();
+    }
+
+    ~mutation_log_private()
+    {
+        // Tear down without calling the virtual flush(): see close_on_destroy().
+        // A destructor must not throw, so swallow any exception it may raise.
+        try
+        {
+            close_on_destroy();
+        }
+        catch (...)
+        {
+        }
     }
 
     virtual ::dsn::task_ptr append(mutation_ptr& mu,

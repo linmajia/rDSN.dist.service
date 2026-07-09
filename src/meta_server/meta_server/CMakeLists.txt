@@ -34,7 +34,11 @@ set(MY_PROJ_LIBS
     gtest
     )
 
-set(MY_PROJ_LIB_PATH "")
+# zookeeper_mt is an external prebuilt library; its directory is not on the
+# global link path (unlike gtest/thrift), so add it explicitly here -- otherwise
+# the Windows link fails with "LNK1104: cannot open file 'zookeeper_mt.lib'".
+# This mirrors how src/test/simple_kv wires the same dependency.
+set(MY_PROJ_LIB_PATH ${ZOOKEEPER_LIB_DIR})
 
 # Extra files that will be installed
 set(MY_BINPLACES "")
