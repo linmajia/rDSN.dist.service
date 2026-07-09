@@ -34,7 +34,10 @@ set(MY_PROJ_LIBS dsn.dist.service.meta_server_lib
                  zookeeper_mt
                  gtest)
 
-set(MY_PROJ_LIB_PATH "")
+# zookeeper_mt is an external prebuilt library whose directory is not on the
+# global link path, so add it explicitly (mirrors src/test/simple_kv) to avoid a
+# Windows "LNK1104: cannot open file 'zookeeper_mt.lib'" link failure.
+set(MY_PROJ_LIB_PATH ${ZOOKEEPER_LIB_DIR})
 
 # Extra files that will be installed
 set(MY_BINPLACES test.sh test.cmd config-test.ini)
