@@ -1957,10 +1957,25 @@ log_file::~log_file()
     err = lf->read_next_log_block(hdr_blob);
     if (err == ERR_INVALID_DATA || err == ERR_INCOMPLETE_DATA || err == ERR_HANDLE_EOF || err == ERR_FILE_OPERATION_FAILED)
     {
-        std::string removed = std::string(path) + ".removed";
-        derror("read first log entry of file %s failed, err = %s. Rename the file to %s", path, err.to_string(), removed.c_str());
         delete lf;
         lf = nullptr;
+
+        // A transient I/O failure (ERR_FILE_OPERATION_FAILED) only means the
+        // first log block could not be read this time; the file content may be
+        // perfectly intact. Renaming it aside (as done for genuinely unusable
+        // files below) would permanently discard committed mutations on a
+        // recoverable error, so keep the file and propagate the error so the
+        // caller aborts replay and can retry after the transient condition
+        // clears. Only files whose content is genuinely unusable (empty,
+        // truncated, or corrupt) are set aside.
+        if (err == ERR_FILE_OPERATION_FAILED)
+        {
+            derror("read first log entry of file %s failed, err = %s. Keep the file for retry", path, err.to_string());
+            return nullptr;
+        }
+
+        std::string removed = std::string(path) + ".removed";
+        derror("read first log entry of file %s failed, err = %s. Rename the file to %s", path, err.to_string(), removed.c_str());
 
         // rename file on failure
         dsn::utils::filesystem::rename_path(path, removed);
