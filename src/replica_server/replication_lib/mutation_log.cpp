@@ -2144,6 +2144,22 @@ error_code log_file::read_next_log_block(/*out*/::dsn::blob& bb)
         return ERR_INVALID_DATA;
     }
 
+    // hdr.length is read from the file and, for a learner replaying peer-supplied private log
+    // files (learn_response.state.files during learning), is untrusted. It is passed straight to
+    // read_next(size_t) below: a negative value sign-extends to a huge size_t and makes the
+    // binary_writer(int) constructor throw std::invalid_argument (uncaught in the replay path ->
+    // std::terminate), while an absurdly large positive value drives a multi-gigabyte up-front
+    // allocation (memory-amplification DoS). A real block body can never be larger than the log
+    // file that contains it, so reject any length outside [0, file_size] here at the trust
+    // boundary instead of crashing the whole replica server on malformed remote data.
+    int64_t file_size = end_offset() - start_offset();
+    if (hdr.length < 0 || static_cast<int64_t>(hdr.length) > file_size)
+    {
+        derror("invalid data block length %d (file size %" PRId64 "), path = %s",
+            hdr.length, file_size, _path.c_str());
+        return ERR_INVALID_DATA;
+    }
+
     err = _stream->read_next(hdr.length, bb);
     if (err != ERR_OK || hdr.length != bb.length())
     {
