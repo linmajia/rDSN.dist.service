@@ -152,7 +152,18 @@ dsn::error_code replication_ddl_client::create_app(const std::string& app_name, 
             std::cout << "create app " << app_name << " failed: [query] received server error: " << query_resp.err.to_string() << std::endl;
             return query_resp.err;
         }
-        dassert(partition_count == query_resp.partition_count, "partition count not equal");
+        // partition_count and partitions come from the meta server's response. A
+        // well-behaved meta echoes the created app's partition_count and returns
+        // exactly that many partitions, but a malformed or malicious response could
+        // carry a mismatched count or a shorter partitions vector. Don't abort
+        // (dassert is always-on) or index out of bounds at query_resp.partitions[i]
+        // on such a response; treat it as not-ready and keep polling.
+        if (partition_count != query_resp.partition_count
+            || query_resp.partitions.size() != static_cast<size_t>(partition_count))
+        {
+            std::cout << app_name << " not ready yet, inconsistent query response, still waiting..." << std::endl;
+            continue;
+        }
         int ready_count = 0;
         for(int i = 0; i < partition_count; i++)
         {
@@ -363,7 +374,10 @@ dsn::error_code replication_ddl_client::cluster_info(const std::string& file_nam
             width = resp.keys[i].size();
     }
 
-    for(int i = 0; i < resp.keys.size(); i++)
+    // keys and values are parallel lists in the meta server's response; a malformed
+    // or malicious response may carry mismatched lengths. Bound the loop by both so a
+    // shorter values list cannot cause an out-of-bounds read at resp.values[i].
+    for(int i = 0; i < resp.keys.size() && i < resp.values.size(); i++)
     {
         out << std::setw(width) << std::left << resp.keys[i]
             << " : " << resp.values[i] << std::endl;
