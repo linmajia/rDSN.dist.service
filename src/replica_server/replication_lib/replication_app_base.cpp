@@ -135,12 +135,32 @@ error_code replica_app_info::load(const char* file)
         return ERR_FILE_OPERATION_FAILED;
     }
 
-    std::shared_ptr<char> buffer(dsn::make_shared_array<char>(sz));
-    is.read((char*)buffer.get(), sz);
-    is.close();
-    
+    // sz is the on-disk size of the .app-info file. A non-positive size denotes a
+    // corrupt/empty file, and make_shared_array(sz) below can throw std::bad_alloc when
+    // the size is absurdly large (disk corruption) or simply when the process is under
+    // memory pressure -- which, under fault injection (libfiu), is exactly the failure
+    // being exercised. That allocation (and the subsequent read) used to sit OUTSIDE the
+    // try/catch, so the throw propagated out of load() and aborted the whole replica while
+    // opening a partition. Reject a bad size up front, and perform the allocation + read
+    // inside the try/catch so an allocation failure or short read is reported as a clean
+    // error instead of crashing.
+    if (sz <= 0)
+    {
+        derror("data in file %s is invalid (size = %lld)", file, (long long)sz);
+        return ERR_INVALID_DATA;
+    }
+
     try
     {
+        std::shared_ptr<char> buffer(dsn::make_shared_array<char>(sz));
+        is.read((char*)buffer.get(), sz);
+        if (!is)
+        {
+            derror("read file %s failed", file);
+            return ERR_FILE_OPERATION_FAILED;
+        }
+        is.close();
+
         binary_reader reader(blob(buffer, sz));
         int magic;
         unmarshall(reader, magic, DSF_THRIFT_BINARY);
