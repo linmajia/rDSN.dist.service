@@ -2167,14 +2167,26 @@ error_code log_file::read_next_log_block(/*out*/::dsn::blob& bb)
     // binary_writer(int) constructor throw std::invalid_argument (uncaught in the replay path ->
     // std::terminate), while an absurdly large positive value drives a multi-gigabyte up-front
     // allocation (memory-amplification DoS). A real block body can never be larger than the log
-    // file that contains it, so reject any length outside [0, file_size] here at the trust
-    // boundary instead of crashing the whole replica server on malformed remote data.
+    // file that contains it, so validate hdr.length at this trust boundary before using it,
+    // instead of crashing the whole replica server on malformed remote data.
     int64_t file_size = end_offset() - start_offset();
-    if (hdr.length < 0 || static_cast<int64_t>(hdr.length) > file_size)
+    if (hdr.length < 0)
     {
+        // A negative length is never valid and would sign-extend to a huge read size.
         derror("invalid data block length %d (file size %" PRId64 "), path = %s",
             hdr.length, file_size, _path.c_str());
         return ERR_INVALID_DATA;
+    }
+    if (static_cast<int64_t>(hdr.length) > file_size)
+    {
+        // The claimed body is larger than the whole log file, so it cannot be fully present.
+        // Treat this as an incomplete (truncated) tail block -- the same outcome the short-read
+        // handling below produces -- rather than allocating hdr.length bytes up front. Returning
+        // ERR_INCOMPLETE_DATA (not ERR_INVALID_DATA) preserves the benign crash-recovery path:
+        // replay() tolerates a truncated tail block but treats ERR_INVALID_DATA as corruption.
+        derror("incomplete data block length %d exceeds file size %" PRId64 ", path = %s",
+            hdr.length, file_size, _path.c_str());
+        return ERR_INCOMPLETE_DATA;
     }
 
     err = _stream->read_next(hdr.length, bb);
