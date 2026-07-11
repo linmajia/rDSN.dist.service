@@ -1416,6 +1416,16 @@ void replica::on_add_learner(const group_check_request& request)
         return;
     }   
 
+    if (request.config.status != partition_status::PS_POTENTIAL_SECONDARY)
+    {
+        // an add-learner request always assigns the potential-secondary role to this node
+        // (see add_potential_secondary). Any other status is invalid peer input and, if
+        // applied, would abort the replica at the dassert below. Reject it instead.
+        dwarn("%s: on_add_learner reject unexpected target status %s",
+              name(), enum_to_string(request.config.status));
+        return;
+    }
+
     if (request.config.ballot > get_ballot()
         || is_same_ballot_status_change_allowed(status(), request.config.status))
     {

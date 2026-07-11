@@ -751,6 +751,23 @@ bool replica::update_local_configuration(const replica_configuration& config, bo
         }
         break;
     case partition_status::PS_POTENTIAL_SECONDARY:
+        if (config.status == partition_status::PS_PRIMARY)
+        {
+            // a potential secondary is never promoted to primary directly (legitimate
+            // promotion goes through PS_SECONDARY first); the state machine below treats
+            // this as an "invalid execution path" and aborts via dassert. Reject it here,
+            // before mutating _config, so a peer-supplied replica_configuration (e.g. from
+            // on_prepare / on_learn_reply / on_add_learner) cannot crash the replica.
+            dwarn(
+                "%s: status change from %s @ %" PRId64 " to %s @ %" PRId64 " is not allowed",
+                name(),
+                enum_to_string(old_status),
+                old_ballot,
+                enum_to_string(config.status),
+                config.ballot
+                );
+            return false;
+        }
         if (config.status == partition_status::PS_INACTIVE)
         {
             if (!_potential_secondary_states.cleanup(false))
@@ -793,6 +810,24 @@ bool replica::update_local_configuration(const replica_configuration& config, bo
                     );
                 return false;
             }
+        }
+        break;
+    case partition_status::PS_PRIMARY:
+        if (config.status == partition_status::PS_POTENTIAL_SECONDARY)
+        {
+            // a primary is never demoted to potential secondary directly; the state machine
+            // below treats this as an "invalid execution path" and aborts via dassert. Reject
+            // it here, before mutating _config, so a peer-supplied replica_configuration cannot
+            // crash the replica.
+            dwarn(
+                "%s: status change from %s @ %" PRId64 " to %s @ %" PRId64 " is not allowed",
+                name(),
+                enum_to_string(old_status),
+                old_ballot,
+                enum_to_string(config.status),
+                config.ballot
+                );
+            return false;
         }
         break;
     default:
