@@ -1155,18 +1155,35 @@ void replica::on_copy_remote_state_completed(
             {
                 _app->reset_counters_after_learning();
 
-                dassert(_app->last_committed_decree() >= _app->last_durable_decree(), "");
-                // because if the original _app->last_committed_decree > resp.last_committed_decree,
-                // the learn_start_decree will be set to 0, which makes learner to learn from scratch
-                dassert(_app->last_committed_decree() <= resp.last_committed_decree, "");
-                ddebug(
-                    "%s: on_copy_remote_state_completed[%016" PRIx64 "]: learner = %s, learn_duration = %" PRIu64 " ms, "
-                    "checkpoint duration = %" PRIu64 " ns, apply checkpoint succeed, app_committed_decree = %" PRId64,
-                    name(), req.signature, req.learner.to_string(),
-                    _potential_secondary_states.duration_ms(),
-                    dsn_now_ns() - start_ts,
-                    _app->last_committed_decree()
-                    );
+                // The decrees produced by applying the checkpoint and resp.last_committed_decree
+                // are all derived from the (potentially corrupted or malicious) learnee response.
+                // These invariants used to be enforced with dassert, which aborts the whole
+                // replica on violation -- so a crafted learn_response could crash the process.
+                // Route an inconsistent applied state to the learning-error path instead; the
+                // learner transitions to PS_ERROR and re-learns from scratch.
+                if (_app->last_committed_decree() < _app->last_durable_decree()
+                    || _app->last_committed_decree() > resp.last_committed_decree)
+                {
+                    derror(
+                        "%s: on_copy_remote_state_completed[%016" PRIx64 "]: learnee = %s, "
+                        "inconsistent decrees after applying learned checkpoint (app_committed = %" PRId64 ", "
+                        "app_durable = %" PRId64 ", learnee_committed = %" PRId64 "), treat as learning error",
+                        name(), req.signature, resp.config.primary.to_string(),
+                        _app->last_committed_decree(), _app->last_durable_decree(), resp.last_committed_decree
+                        );
+                    err = ERR_INVALID_DATA;
+                }
+                else
+                {
+                    ddebug(
+                        "%s: on_copy_remote_state_completed[%016" PRIx64 "]: learner = %s, learn_duration = %" PRIu64 " ms, "
+                        "checkpoint duration = %" PRIu64 " ns, apply checkpoint succeed, app_committed_decree = %" PRId64,
+                        name(), req.signature, req.learner.to_string(),
+                        _potential_secondary_states.duration_ms(),
+                        dsn_now_ns() - start_ts,
+                        _app->last_committed_decree()
+                        );
+                }
             }
             else
             {
