@@ -293,6 +293,22 @@ void mutation::write_to(binary_writer& writer, dsn_message_t /*to*/) const
         for (int i = 0; i < size; ++i)
         {
             int len = lengths[i];
+            // len was validated non-negative above, but not yet against the bytes that are
+            // actually present. dsn_transient_malloc(len) below allocates before reader.read()
+            // performs its own bounds check, so a corrupt/truncated log block or a malicious
+            // prepare/learn image that declares a huge per-update data length (up to ~2GB) would
+            // force a correspondingly huge transient allocation on the replica before the short
+            // read is ever detected -- a memory-amplification DoS reachable from a tiny image
+            // (on_prepare decodes the mutation before any ballot/authority check). Reject any
+            // length the remaining buffer cannot satisfy before allocating. As earlier updates
+            // consume the data section get_remaining_size() shrinks, so this also rejects an
+            // over-declared cumulative length.
+            if (len > reader.get_remaining_size())
+            {
+                derror("read mutation from binary failed: update data length %d "
+                       "exceeds remaining buffer size %d", len, reader.get_remaining_size());
+                return nullptr;
+            }
             std::shared_ptr<char> holder((char*)dsn_transient_malloc(len), [](char* ptr){ dsn_transient_free((void*)ptr); });
             reader.read(holder.get(), len);
             mu->data.updates[i].data.assign(holder, 0, len);
