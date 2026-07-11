@@ -68,6 +68,18 @@ void replica::on_client_write(task_code code, dsn_message_t request)
         return;
     }
 
+    // A client write must carry a payload. A crafted or corrupted request with an empty
+    // body is malformed: on the thrift/raw/http parsers it would trip an assert deep in
+    // mutation::add_client_request (an empty body surfaces there as a failed read), and on
+    // the default parser it would inject an empty update into the replication log. Reject it
+    // at the trust boundary with a clear error to the client instead.
+    if (dsn_msg_body_size(request) == 0)
+    {
+        derror("%s: reject client write with empty payload", name());
+        response_client_message(request, ERR_INVALID_DATA);
+        return;
+    }
+
     auto mu = _primary_states.write_queue.add_work(code, request, this);
     if (mu)
     {

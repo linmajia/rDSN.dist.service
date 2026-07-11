@@ -119,12 +119,23 @@ void mutation::add_client_request(task_code code, dsn_message_t request)
         update.serialization_type = dsn_msg_get_serialize_format(request);
         dsn_msg_add_ref(request); // released on dctor
 
-        void* ptr;
-        size_t size;
+        void* ptr = nullptr;
+        size_t size = 0;
         bool r = dsn_msg_read_next(request, &ptr, &size);
-        dassert(r, "payload is not present");
-        dsn_msg_read_commit(request, 0); // so we can re-read the request buffer in replicated app
-        update.data.assign((char*)ptr, 0, (int)size);
+        if (r)
+        {
+            dsn_msg_read_commit(request, 0); // so we can re-read the request buffer in replicated app
+            update.data.assign((char*)ptr, 0, (int)size);
+        }
+        else
+        {
+            // Defensive: a client write whose payload cannot be read (e.g. a crafted or
+            // corrupted request with an empty body, which the thrift/raw parsers surface as
+            // a failed read). on_client_write already rejects empty-payload writes at the
+            // trust boundary; if one still reaches here, keep the update empty instead of
+            // aborting the whole replica process.
+            derror("mutation::add_client_request: client write payload is not present");
+        }
 
         _appro_data_bytes += sizeof(int) + (int)size; // data size
     }   
