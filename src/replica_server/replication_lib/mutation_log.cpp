@@ -42,6 +42,7 @@
 #include <dsn/cpp/utils.h>
 #include <sstream>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 # ifdef __TITLE__
@@ -1015,11 +1016,12 @@ std::pair<log_file_ptr, int64_t> mutation_log::mark_new_offset(size_t size, bool
     end_offset += sizeof(log_block_header);
 
     // read file header
-    end_offset += log->read_file_header(*reader);
-    if (!log->is_right_header())
+    int file_header_size = log->read_file_header(*reader);
+    if (file_header_size < 0 || !log->is_right_header())
     {
         return ERR_INVALID_DATA;
     }
+    end_offset += file_header_size;
 
     while (true)
     {
@@ -1951,6 +1953,12 @@ log_file::~log_file()
         dwarn("invalid log path %s", path);
         return nullptr;
     }
+    if (start_offset < 0)
+    {
+        err = ERR_INVALID_PARAMETERS;
+        dwarn("invalid negative start offset in log path %s", path);
+        return nullptr;
+    }
 
     dsn_handle_t hfile = dsn_file_open(path, O_RDONLY | O_BINARY, 0);
     if (!hfile)
@@ -1971,6 +1979,15 @@ log_file::~log_file()
     {
         err = ERR_FILE_OPERATION_FAILED;
         derror("get file size of log file %s failed", path);
+        delete lf;
+        return nullptr;
+    }
+    if (file_sz < 0
+        || start_offset > std::numeric_limits<int64_t>::max() - file_sz)
+    {
+        err = ERR_INVALID_PARAMETERS;
+        derror("invalid offset range for log file %s: start = %" PRId64 ", size = %" PRId64,
+            path, start_offset, file_sz);
         delete lf;
         return nullptr;
     }
@@ -2008,8 +2025,8 @@ log_file::~log_file()
     }
 
     binary_reader reader(hdr_blob);
-    lf->read_file_header(reader);
-    if (!lf->is_right_header())
+    int file_header_size = lf->read_file_header(reader);
+    if (file_header_size < 0 || !lf->is_right_header())
     {
         std::string removed = std::string(path) + ".removed";
         derror("invalid log file header of file %s. Rename the file to %s", path, removed.c_str());
@@ -2297,10 +2314,29 @@ int log_file::read_file_header(binary_reader& reader)
      *   log_file_header +
      *   count + count * (gpid + replica_log_info)
      */
+    const int fixed_size = static_cast<int>(sizeof(log_file_header) + sizeof(int));
+    if (reader.get_remaining_size() < fixed_size)
+    {
+        derror("invalid log file header in %s: only %d bytes remain, need at least %d",
+            _path.c_str(), reader.get_remaining_size(), fixed_size);
+        return -1;
+    }
+
     reader.read_pod(_header);
 
     int count;
     reader.read(count);
+    const size_t entry_size = sizeof(gpid) + sizeof(replica_log_info);
+    if (count < 0
+        || static_cast<uint64_t>(count) * entry_size
+            > static_cast<uint64_t>(reader.get_remaining_size()))
+    {
+        derror("invalid log file header in %s: count = %d, remaining bytes = %d",
+            _path.c_str(), count, reader.get_remaining_size());
+        return -1;
+    }
+
+    _previous_log_max_decrees.clear();
     for (int i = 0; i < count; i++)
     {
         gpid gpid;
@@ -2312,7 +2348,7 @@ int log_file::read_file_header(binary_reader& reader)
         _previous_log_max_decrees[gpid] = info;
     }
 
-    return get_file_header_size();
+    return fixed_size + static_cast<int>(static_cast<size_t>(count) * entry_size);
 }
 
 int log_file::get_file_header_size() const

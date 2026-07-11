@@ -602,7 +602,7 @@ public:
     // file header
     log_file_header& header() { return _header;}
 
-    // read file header from reader, return byte count consumed
+    // read file header from reader; return byte count consumed, or -1 for malformed data
     int read_file_header(binary_reader& reader);
     // write file header to writer, return byte count written
     int write_file_header(binary_writer& writer, const replica_log_info_map& init_max_decrees);
