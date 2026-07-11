@@ -518,6 +518,61 @@ dsn::error_code server_state::sync_apps_from_remote_storage()
                         err = ERR_INVALID_DATA;
                         return;
                     }
+                    // pc.secondaries is loaded from (semi-untrusted) remote storage and is
+                    // consumed by initialize_node_state() and check_consistency(), both of which
+                    // assert (always-on dassert -> coredump) that every endpoint is valid and
+                    // registered in _nodes. A corrupt/hand-edited record can carry an invalid
+                    // endpoint (e.g. a secondary serialized as the "invalid address" marker, which
+                    // json_decode accepts for the primary's benefit), which would abort the meta
+                    // server on recovery. For stateless apps this vector holds hosts() and pairs
+                    // with last_drops as workers(), so we cannot silently drop entries without
+                    // breaking the hosts().size()==workers().size() invariant; reject the whole
+                    // record here through the same error channel as the pid check instead.
+                    for (const dsn::rpc_address& ep : pc.secondaries)
+                    {
+                        if (ep.is_invalid())
+                        {
+                            derror("invalid secondary endpoint in partition config from remote storage, path = %s", partition_path.c_str());
+                            err = ERR_INVALID_DATA;
+                            return;
+                        }
+                    }
+                    // last_drops is also loaded from (semi-untrusted) remote storage. check_consistency()
+                    // enforces, via always-on dasserts, additional invariants over it that a corrupt or
+                    // hand-edited record can violate, aborting the meta server on recovery. Mirror those
+                    // exact invariants here and reject the whole record through the same error channel:
+                    //   - stateful apps: neither the primary nor any secondary may also appear in last_drops.
+                    //   - stateless apps: secondaries (hosts) and last_drops (workers) are paired, so their
+                    //     sizes must match (partition_configuration_stateless asserts hosts()==workers() size).
+                    if (app->is_stateful)
+                    {
+                        if (!pc.primary.is_invalid()
+                            && std::find(pc.last_drops.begin(), pc.last_drops.end(), pc.primary) != pc.last_drops.end())
+                        {
+                            derror("primary endpoint also present in last_drops in partition config from remote storage, path = %s", partition_path.c_str());
+                            err = ERR_INVALID_DATA;
+                            return;
+                        }
+                        for (const dsn::rpc_address& ep : pc.secondaries)
+                        {
+                            if (std::find(pc.last_drops.begin(), pc.last_drops.end(), ep) != pc.last_drops.end())
+                            {
+                                derror("secondary endpoint also present in last_drops in partition config from remote storage, path = %s", partition_path.c_str());
+                                err = ERR_INVALID_DATA;
+                                return;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if (pc.secondaries.size() != pc.last_drops.size())
+                        {
+                            derror("stateless partition config from remote storage has mismatched secondaries(%d)/last_drops(%d) sizes, path = %s",
+                                (int)pc.secondaries.size(), (int)pc.last_drops.size(), partition_path.c_str());
+                            err = ERR_INVALID_DATA;
+                            return;
+                        }
+                    }
                     {
                         zauto_write_lock l(_lock);
                         app->partitions[partition_id] = pc;
