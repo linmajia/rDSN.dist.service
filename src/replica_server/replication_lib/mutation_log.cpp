@@ -624,7 +624,19 @@ error_code mutation_log::open(replay_callback read_callback, io_failure_callback
                    fpath.c_str(), log->start_offset(), log->end_offset(), log->end_offset() - log->start_offset());
         }
 
-        dassert(_log_files.find(log->index()) == _log_files.end(), "");
+        // Two on-disk log files could resolve to the same index if the log
+        // directory is corrupt (partial rename, media error, stray copy). This
+        // used to trip a dassert that aborts the entire replica server, taking
+        // down every hosted replica. Reject through the error_code channel so the
+        // caller's existing recovery (fail this replica / rebuild the shared log)
+        // handles it instead of crashing the process.
+        if (_log_files.find(log->index()) != _log_files.end())
+        {
+            derror("duplicate log file index %d detected while opening %s, reject",
+                   log->index(),
+                   fpath.c_str());
+            return ERR_INVALID_DATA;
+        }
         _log_files[log->index()] = log;
     }
 
@@ -1084,7 +1096,19 @@ std::pair<log_file_ptr, int64_t> mutation_log::mark_new_offset(size_t size, bool
             }
         }
 
-        dassert(logs.find(log->index()) == logs.end(), "");
+        // The file list replayed here can originate from an untrusted source
+        // (e.g. the learnee-supplied learn_response.state.files during learning),
+        // so two entries may resolve to the same log index. Such a duplicate used
+        // to trip a dassert that aborts the whole replica server; reject the replay
+        // through the existing error_code channel so the caller can re-learn or fail
+        // just this operation instead of crashing the process.
+        if (logs.find(log->index()) != logs.end())
+        {
+            derror("duplicate log file index %d detected while replaying %s, reject replay",
+                   log->index(),
+                   fpath.c_str());
+            return ERR_INVALID_DATA;
+        }
         logs[log->index()] = log;
     }
 
