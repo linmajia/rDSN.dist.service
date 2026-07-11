@@ -101,6 +101,17 @@ error_code replica_init_info::store(const char* file)
     os.write((const char*)this, sizeof(*this));
     os.close();
 
+    // A failed write or flush (disk full, or a fault-injected I/O error) must not be
+    // promoted to a successful store: renaming a partially written .init-info over the good
+    // file would corrupt the persisted replica metadata and break recovery. Detect the
+    // failure via the stream state, drop the temp file, and keep the original intact.
+    if (!os)
+    {
+        derror("write file %s failed", tmp_file.c_str());
+        ::dsn::utils::filesystem::remove_path(tmp_file);
+        return ERR_FILE_OPERATION_FAILED;
+    }
+
     if (!utils::filesystem::rename_path(tmp_file, ffile))
     {
         derror("move file from %s to %s failed", tmp_file.c_str(), ffile.c_str());
@@ -203,6 +214,16 @@ error_code replica_app_info::store(const char* file)
     auto data = writer.get_buffer();
     os.write((const char*)data.data(), (std::streamsize)data.length());
     os.close();
+
+    // See replica_init_info::store: a failed write/flush must not be renamed over the good
+    // file, which would corrupt the persisted app metadata. Drop the temp file and keep the
+    // original on failure instead of reporting success.
+    if (!os)
+    {
+        derror("write file %s failed", tmp_file.c_str());
+        ::dsn::utils::filesystem::remove_path(tmp_file);
+        return ERR_FILE_OPERATION_FAILED;
+    }
 
     if (!utils::filesystem::rename_path(tmp_file, ffile))
     {
