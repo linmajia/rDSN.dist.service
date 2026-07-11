@@ -124,13 +124,27 @@ void replica::on_config_proposal(configuration_update_request& proposal)
         remove(proposal);
         break;
     default:
-        dassert (false, "");
+        derror(
+            "%s: invalid config proposal type %d received, ignore it",
+            name(),
+            static_cast<int>(proposal.type)
+            );
+        break;
     }
 }
 
 void replica::assign_primary(configuration_update_request& proposal)
 {
-    dassert(proposal.node == _stub->_primary_address, "");
+    if (proposal.node != _stub->_primary_address)
+    {
+        dwarn(
+            "%s: invalid assign primary proposal, target node %s does not match this node %s, ignore it",
+            name(),
+            proposal.node.to_string(),
+            _stub->_primary_address.to_string()
+            );
+        return;
+    }
 
     if (status() == partition_status::PS_PRIMARY)
     {
@@ -168,12 +182,20 @@ void replica::add_potential_secondary(configuration_update_request& proposal)
         return;
     }
 
-    dassert (proposal.config.ballot == get_ballot(), "");
-    dassert (proposal.config.pid == _primary_states.membership.pid, "");
-    dassert (proposal.config.primary == _primary_states.membership.primary, "");
-    dassert (proposal.config.secondaries == _primary_states.membership.secondaries, "");
-    dassert (!_primary_states.check_exist(proposal.node, partition_status::PS_PRIMARY), "");
-    dassert (!_primary_states.check_exist(proposal.node, partition_status::PS_SECONDARY), "");
+    if (proposal.config.ballot != get_ballot()
+        || proposal.config.pid != _primary_states.membership.pid
+        || proposal.config.primary != _primary_states.membership.primary
+        || proposal.config.secondaries != _primary_states.membership.secondaries
+        || _primary_states.check_exist(proposal.node, partition_status::PS_PRIMARY)
+        || _primary_states.check_exist(proposal.node, partition_status::PS_SECONDARY))
+    {
+        dwarn(
+            "%s: ignore inconsistent add secondary proposal for node %s",
+            name(),
+            proposal.node.to_string()
+            );
+        return;
+    }
 
     int potential_secondaries_count = _primary_states.membership.secondaries.size() + _primary_states.learners.size();
     if (potential_secondaries_count >= _primary_states.membership.max_replica_count - 1)
@@ -257,10 +279,18 @@ void replica::downgrade_to_secondary_on_primary(configuration_update_request& pr
     if (proposal.config.ballot != get_ballot() || status() != partition_status::PS_PRIMARY)
         return;
 
-    dassert (proposal.config.pid == _primary_states.membership.pid, "");
-    dassert (proposal.config.primary == _primary_states.membership.primary, "");
-    dassert (proposal.config.secondaries == _primary_states.membership.secondaries, "");
-    dassert (proposal.node == proposal.config.primary, "");
+    if (proposal.config.pid != _primary_states.membership.pid
+        || proposal.config.primary != _primary_states.membership.primary
+        || proposal.config.secondaries != _primary_states.membership.secondaries
+        || proposal.node != proposal.config.primary)
+    {
+        dwarn(
+            "%s: ignore inconsistent downgrade to secondary proposal for node %s",
+            name(),
+            proposal.node.to_string()
+            );
+        return;
+    }
 
     proposal.config.primary.set_invalid();
     proposal.config.secondaries.push_back(proposal.node);
@@ -274,9 +304,17 @@ void replica::downgrade_to_inactive_on_primary(configuration_update_request& pro
     if (proposal.config.ballot != get_ballot() || status() != partition_status::PS_PRIMARY)
         return;
 
-    dassert (proposal.config.pid == _primary_states.membership.pid, "");
-    dassert (proposal.config.primary == _primary_states.membership.primary, "");
-    dassert (proposal.config.secondaries == _primary_states.membership.secondaries, "");
+    if (proposal.config.pid != _primary_states.membership.pid
+        || proposal.config.primary != _primary_states.membership.primary
+        || proposal.config.secondaries != _primary_states.membership.secondaries)
+    {
+        dwarn(
+            "%s: ignore inconsistent downgrade to inactive proposal for node %s",
+            name(),
+            proposal.node.to_string()
+            );
+        return;
+    }
 
     if (proposal.node == proposal.config.primary)
     {
@@ -285,7 +323,15 @@ void replica::downgrade_to_inactive_on_primary(configuration_update_request& pro
     else
     {
         auto rt = replica_helper::remove_node(proposal.node, proposal.config.secondaries);
-        dassert (rt, "");
+        if (!rt)
+        {
+            dwarn(
+                "%s: ignore downgrade to inactive proposal, node %s is not a secondary",
+                name(),
+                proposal.node.to_string()
+                );
+            return;
+        }
     }
 
     update_configuration_on_meta_server(config_type::CT_DOWNGRADE_TO_INACTIVE, proposal.node, proposal.config);
@@ -296,22 +342,47 @@ void replica::remove(configuration_update_request& proposal)
     if (proposal.config.ballot != get_ballot() || status() != partition_status::PS_PRIMARY)
         return;
 
-    dassert (proposal.config.pid == _primary_states.membership.pid, "");
-    dassert (proposal.config.primary == _primary_states.membership.primary, "");
-    dassert (proposal.config.secondaries == _primary_states.membership.secondaries, "");
+    if (proposal.config.pid != _primary_states.membership.pid
+        || proposal.config.primary != _primary_states.membership.primary
+        || proposal.config.secondaries != _primary_states.membership.secondaries)
+    {
+        dwarn(
+            "%s: ignore inconsistent remove proposal for node %s",
+            name(),
+            proposal.node.to_string()
+            );
+        return;
+    }
 
     auto st = _primary_states.get_node_status(proposal.node);
 
     switch (st)
     {
     case partition_status::PS_PRIMARY:
-        dassert (proposal.config.primary == proposal.node, "");
+        if (proposal.config.primary != proposal.node)
+        {
+            dwarn(
+                "%s: ignore inconsistent remove proposal, primary %s does not match node %s",
+                name(),
+                proposal.config.primary.to_string(),
+                proposal.node.to_string()
+                );
+            return;
+        }
         proposal.config.primary.set_invalid();
         break;
     case partition_status::PS_SECONDARY:
         {
         auto rt = replica_helper::remove_node(proposal.node, proposal.config.secondaries);
-        dassert (rt, "");
+        if (!rt)
+        {
+            dwarn(
+                "%s: ignore remove proposal, node %s is not a secondary",
+                name(),
+                proposal.node.to_string()
+                );
+            return;
+        }
         }
         break;
     case partition_status::PS_POTENTIAL_SECONDARY:
@@ -346,7 +417,16 @@ void replica::on_remove(const replica_configuration& request)
         return;
     }
 
-    dassert (request.status == partition_status::PS_INACTIVE, "");
+    if (request.status != partition_status::PS_INACTIVE)
+    {
+        derror(
+            "%s: invalid remove request with status %s, ignore it",
+            name(),
+            enum_to_string(request.status)
+            );
+        return;
+    }
+
     update_local_configuration(request);
 }
 
