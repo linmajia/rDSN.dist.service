@@ -484,8 +484,16 @@ error_code replication_app_base::open_new_internal(replica* r, int64_t shared_lo
     dassert(mu->data.updates.size() > 0, "");
 
     int request_count = static_cast<int>(mu->client_requests.size());
-    dsn_message_t* batched_requests = (dsn_message_t*)alloca(sizeof(dsn_message_t) * request_count);
-    dsn_message_t* faked_requests = (dsn_message_t*)alloca(sizeof(dsn_message_t) * request_count);
+    // request_count comes from the mutation's update count. For a mutation that was
+    // deserialized from an untrusted prepare/learn RPC or an on-disk log block, this count
+    // can be far larger than the ~1MB honest mutation cap (mutation::is_full), so sizing
+    // these two scratch arrays with alloca() would let a malicious or corrupt mutation
+    // overflow the thread stack (SIGSEGV). Use heap-backed storage instead: the allocation
+    // is then bounded by available memory and fails safely rather than smashing the stack.
+    std::vector<dsn_message_t> batched_requests_holder(request_count);
+    std::vector<dsn_message_t> faked_requests_holder(request_count);
+    dsn_message_t* batched_requests = batched_requests_holder.data();
+    dsn_message_t* faked_requests = faked_requests_holder.data();
     int batched_count = 0;
     int faked_count = 0;
     for (int i = 0; i < request_count; i++)

@@ -246,6 +246,19 @@ void mutation::write_to(binary_writer& writer, dsn_message_t /*to*/) const
             derror("read mutation from binary failed: invalid mutation update count");
             return nullptr;
         }
+        // Each update contributes at least 12 bytes to the framing section that follows:
+        // a 4-byte task-code-name length, a 4-byte serialization type, and a 4-byte data
+        // length (before any name or data bytes). An update count that cannot possibly fit
+        // in the remaining buffer therefore denotes a corrupt/truncated log block or a
+        // malicious peer image; reject it up front so we never resize()/allocate huge
+        // per-update vectors on a bogus count. 64-bit math avoids overflow of size * 12.
+        if (static_cast<int64_t>(size) * 12 > reader.get_remaining_size())
+        {
+            derror("read mutation from binary failed: mutation update count %d "
+                   "exceeds remaining buffer size %d",
+                   size, reader.get_remaining_size());
+            return nullptr;
+        }
         mu->data.updates.resize(size);
         std::vector<int> lengths(size, 0);
         for (int i = 0; i < size; ++i)
