@@ -106,7 +106,12 @@ error_code prepare_list::prepare(mutation_ptr& mu, partition_status::type status
             pop_min();
         }
         err = mutation_cache::put(mu);
-        dassert (err == ERR_OK, "");
+        if (err != ERR_OK)
+        {
+            derror("failed to put mutation %" PRId64 " into prepare list: %s",
+                d, err.to_string()
+                );
+        }
         return err;
 
     //// delayed commit - only when capacity is an issue
@@ -142,7 +147,12 @@ error_code prepare_list::prepare(mutation_ptr& mu, partition_status::type status
             pop_min();
         }
         err = mutation_cache::put(mu);
-        dassert (err == ERR_OK, "");
+        if (err != ERR_OK)
+        {
+            derror("failed to put mutation %" PRId64 " into prepare list: %s",
+                d, err.to_string()
+                );
+        }
         return err;
 
     default:
@@ -167,12 +177,22 @@ bool prepare_list::commit(decree d, commit_type ct)
             for (decree d0 = last_committed_decree() + 1; d0 <= d; d0++)
             {
                 mutation_ptr mu = get_mutation_by_decree(d0);
-                dassert(mu != nullptr &&
-                    (mu->is_logged()) &&
-                    mu->data.header.ballot >= last_bt,
-                    "mutation %" PRId64 " is missing in prepare list",
-                    d0
-                    );
+                if (mu == nullptr ||
+                    !(mu->is_logged()) ||
+                    mu->data.header.ballot < last_bt)
+                {
+                    // A hard commit assumes every mutation up to `d` is present and logged.
+                    // `d` can originate from an untrusted peer (e.g. a forged
+                    // last_committed_decree in a prepare / group-check / learn request), so a
+                    // missing or not-yet-logged mutation here means the requested decree cannot
+                    // be honored. Stop committing gracefully instead of aborting the whole
+                    // process; the replica stays behind and recovers through the normal
+                    // failure / re-learn path.
+                    derror("mutation %" PRId64 " is missing in prepare list, stop hard commit",
+                        d0
+                        );
+                    break;
+                }
 
                 _last_committed_decree++;
                 last_bt = mu->data.header.ballot;

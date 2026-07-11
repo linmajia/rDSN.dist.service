@@ -62,11 +62,22 @@ error_code mutation_cache::put(mutation_ptr& mu)
     }
     else if (decree > _end_decree)
     {
+        // A mutation decree can originate from an untrusted peer; guard against a huge gap
+        // overflowing the int delta below. Such a decree is far beyond the cache capacity and
+        // is rejected the same way as an over-capacity put.
+        if (decree - _end_decree > _max_count)
+        {
+            return ERR_CAPACITY_EXCEEDED;
+        }
         delta = static_cast<int>(decree - _end_decree);
         tag = 1;
     }
     else if (decree < _start_decree)
     {
+        if (_start_decree - decree > _max_count)
+        {
+            return ERR_CAPACITY_EXCEEDED;
+        }
         delta = static_cast<int>(_start_decree - decree);
         tag = -1;
     }
