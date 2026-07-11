@@ -51,6 +51,41 @@
 
 namespace dsn { namespace replication {
 
+namespace {
+
+// A learn response lists the checkpoint / private-log file names that the learner
+// combines with its local learn_dir() (via path_combine) to build the READ paths
+// handed to apply_checkpoint() / mutation_log::replay(). These names come from the
+// learnee (a potentially corrupt or malicious primary), and path_combine() ->
+// get_normalized_path() only collapses redundant separators; it does NOT resolve
+// ".." components. So a name such as "../../../etc/passwd" walks out of learn_dir()
+// (CWE-22 path traversal). Legitimate learn state files never contain a ".." path
+// component, so reject any name whose (separator-delimited) path walks up the tree.
+// Only a component that is exactly ".." is flagged, so real names such as "...",
+// "a..b" are still allowed.
+bool learn_state_file_has_parent_ref(const std::string& path)
+{
+    size_t start = 0;
+    const size_t len = path.length();
+    while (start <= len)
+    {
+        size_t sep = path.find_first_of("/\\", start);
+        size_t end = (sep == std::string::npos) ? len : sep;
+        if ((end - start) == 2 && path[start] == '.' && path[start + 1] == '.')
+        {
+            return true;
+        }
+        if (sep == std::string::npos)
+        {
+            break;
+        }
+        start = sep + 1;
+    }
+    return false;
+}
+
+}
+
 void replica::init_learn(uint64_t signature)
 {
     check_hashed_access();
@@ -1016,6 +1051,27 @@ void replica::on_learn_reply(
    
     else if (resp.state.files.size() > 0)
     {
+        // resp.state.files are file names supplied by the learnee (a potentially
+        // malicious primary). They are combined with the local learn_dir() to build
+        // the read paths handed to apply_checkpoint()/mutation_log::replay() (and are
+        // also the file list requested from the learnee over NFS). Reject any name
+        // that walks out of learn_dir() before creating the dir or starting the copy,
+        // so a crafted learn response cannot escape learn_dir() (CWE-22 path traversal).
+        for (auto& f : resp.state.files)
+        {
+            if (learn_state_file_has_parent_ref(f))
+            {
+                derror(
+                    "%s: on_learn_reply[%016" PRIx64 "]: learnee = %s, rejecting learn "
+                    "response with parent-directory reference in state file name %s",
+                    name(), req.signature, resp.config.primary.to_string(),
+                    f.c_str()
+                    );
+                handle_learning_error(ERR_INVALID_DATA, false);
+                return;
+            }
+        }
+
         auto learn_dir = _app->learn_dir();
         utils::filesystem::remove_path(learn_dir);
         utils::filesystem::create_directory(learn_dir);
