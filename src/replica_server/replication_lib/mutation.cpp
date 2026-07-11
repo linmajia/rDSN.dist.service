@@ -234,7 +234,14 @@ void mutation::write_to(binary_writer& writer, dsn_message_t /*to*/) const
 
         int size;
         reader.read_pod(size);
-        if (size < 0)
+        // A well-formed mutation always carries at least one update: add_client_request
+        // pushes an update for every client write, and internal empty writes push a single
+        // RPC_REPLICATION_WRITE_EMPTY update. A serialized mutation with zero updates can
+        // therefore only come from a corrupt/truncated log or a malicious peer. Reject it
+        // here (return nullptr like every other validation failure) so that it never reaches
+        // replication_app_base::write_internal, whose dassert(updates.size() > 0) would
+        // otherwise abort the whole replica server on such an image.
+        if (size <= 0)
         {
             derror("read mutation from binary failed: invalid mutation update count");
             return nullptr;
