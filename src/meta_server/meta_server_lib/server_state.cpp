@@ -89,6 +89,28 @@ static bool is_valid_stateful_partition_config(const configuration_update_reques
         }
     }
 
+    // The request's target node must not already be present in last_drops. For a
+    // removal/downgrade request (CT_REMOVE / CT_DOWNGRADE_TO_INACTIVE),
+    // server_state::on_update_configuration hands the request to
+    // maintain_drops(..., is_add=false), which asserts (dassert -> coredump, aborting
+    // the meta server) if the node is already in the drop set. A malicious or corrupt
+    // replica can craft a request whose node is the current primary/secondary (so
+    // request_check passes) yet is also listed in config.last_drops, while the new
+    // config's own primary/secondaries are not -- slipping past the checks above and
+    // driving the assert with unauthenticated network input (CWE-617). Reject it here.
+    // Restore requests legitimately re-add a dropped node, so honor the same
+    // is_node_being_restored exemption used for primary/secondaries above; those types
+    // call maintain_drops(..., is_add=true), which never asserts. Honest removal
+    // requests never list the node being removed in last_drops (maintain_drops is what
+    // adds it), so this check is behavior-preserving.
+    if (!request.node.is_invalid() &&
+        std::find(config.last_drops.begin(), config.last_drops.end(), request.node) !=
+            config.last_drops.end() &&
+        !is_node_being_restored(request.type, request.node, request.node))
+    {
+        return false;
+    }
+
     return true;
 }
 
