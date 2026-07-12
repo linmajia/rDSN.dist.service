@@ -114,16 +114,16 @@ int zookeeper_session::attach(
     const state_callback &cb)
 {
     utils::auto_write_lock l(_watcher_lock);
-    if (nullptr == _handle)
+    if (nullptr == _handle.load(std::memory_order_relaxed))
     {
-        _handle = zookeeper_init(
+        _handle.store(zookeeper_init(
             zookeeper_session_mgr::instance().zoo_hosts(),
             global_watcher,
             zookeeper_session_mgr::instance().timeout(),
             nullptr,
             this,
-            0);
-        if (nullptr == _handle)
+            0), std::memory_order_relaxed);
+        if (nullptr == _handle.load(std::memory_order_relaxed))
         {
             // zookeeper_init() returns null on a bad hosts string or when an
             // allocation inside the ZooKeeper C client fails (e.g. under memory
@@ -142,7 +142,7 @@ int zookeeper_session::attach(
     _watchers.back().callback_owner = callback_owner;
     _watchers.back().watcher_callback = cb;
 
-    return zoo_state(_handle);
+    return zoo_state(_handle.load(std::memory_order_relaxed));
 }
 
 void zookeeper_session::detach(void *callback_owner)
@@ -178,7 +178,8 @@ void zookeeper_session::visit(zoo_opcontext *ctx)
 {
     ctx->_priv_session_ref = this;
 
-    if ( zoo_state(_handle) != ZOO_CONNECTED_STATE ) {
+    zhandle_t* handle = _handle.load(std::memory_order_relaxed);
+    if ( zoo_state(handle) != ZOO_CONNECTED_STATE ) {
         ctx->_output.error = ZINVALIDSTATE;
         ctx->_callback_function(ctx);
         free_context(ctx);
@@ -201,7 +202,7 @@ void zookeeper_session::visit(zoo_opcontext *ctx)
     {
     case ZOO_CREATE:
         ec = zoo_acreate(
-            _handle, 
+            handle,
             path, 
             input._value.data(), 
             input._value.length(),
@@ -212,7 +213,7 @@ void zookeeper_session::visit(zoo_opcontext *ctx)
         break;
     case ZOO_DELETE:
         ec = zoo_adelete(
-            _handle, 
+            handle,
             path, 
             -1,
             global_void_completion, 
@@ -222,7 +223,7 @@ void zookeeper_session::visit(zoo_opcontext *ctx)
         if (1 == input._is_set_watch)
             add_watch_object();
         ec = zoo_aexists(
-            _handle,
+            handle,
             path,
             input._is_set_watch,
             global_state_completion,
@@ -232,7 +233,7 @@ void zookeeper_session::visit(zoo_opcontext *ctx)
         if (1 == input._is_set_watch)
             add_watch_object();
         ec = zoo_aget(
-            _handle, 
+            handle,
             path, 
             input._is_set_watch,
             global_data_completion,
@@ -240,7 +241,7 @@ void zookeeper_session::visit(zoo_opcontext *ctx)
         break;
     case ZOO_SET:
         ec = zoo_aset(
-            _handle, 
+            handle,
             path, 
             input._value.data(),
             input._value.length(),
@@ -252,7 +253,7 @@ void zookeeper_session::visit(zoo_opcontext *ctx)
         if (1 == input._is_set_watch)
             add_watch_object();
         ec = zoo_aget_children(
-            _handle,
+            handle,
             path,
             input._is_set_watch,
             global_strings_completion,
@@ -260,7 +261,7 @@ void zookeeper_session::visit(zoo_opcontext *ctx)
         break;
     case ZOO_TRANSACTION:
         ec = zoo_amulti(
-            _handle,
+            handle,
             input._pkt->_count,
             input._pkt->_ops,
             input._pkt->_results,
@@ -299,7 +300,7 @@ void zookeeper_session::global_watcher(zhandle_t *handle, int type, int state, c
     if (type!=ZOO_SESSION_EVENT && path!=nullptr)
         ddebug("watcher path: %s", path);
 
-    dassert(zoo_session->_handle == handle, "");
+    dassert(zoo_session->_handle.load(std::memory_order_relaxed) == handle, "");
     zoo_session->dispatch_event(type, state, type==ZOO_SESSION_EVENT?"":path);
 }
 

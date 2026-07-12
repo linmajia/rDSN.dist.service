@@ -170,13 +170,13 @@ error_code meta_state_service_zookeeper::initialize(const std::vector<std::strin
     }
 
     _session = zookeeper_session_mgr::instance().get_session(&node);
-    _zoo_state = _session->attach(this, std::bind(&meta_state_service_zookeeper::on_zoo_session_evt,
+    _zoo_state.store(_session->attach(this, std::bind(&meta_state_service_zookeeper::on_zoo_session_evt,
                                                   ref_this(this),
-                                                  std::placeholders::_1) );
-    if (_zoo_state != ZOO_CONNECTED_STATE)
+                                                  std::placeholders::_1) ), std::memory_order_relaxed);
+    if (_zoo_state.load(std::memory_order_relaxed) != ZOO_CONNECTED_STATE)
     {
         _notifier.wait_for( zookeeper_session_mgr::fast_instance().timeout() );
-        if (_zoo_state != ZOO_CONNECTED_STATE)
+        if (_zoo_state.load(std::memory_order_relaxed) != ZOO_CONNECTED_STATE)
             return ERR_TIMEOUT;
     }
 
@@ -371,7 +371,7 @@ task_ptr meta_state_service_zookeeper::get_children(
 /* this function runs in zookeeper do-completion thread */
 void meta_state_service_zookeeper::on_zoo_session_evt(ref_this _this, int zoo_state)
 {
-    _this->_zoo_state = zoo_state;
+    _this->_zoo_state.store(zoo_state, std::memory_order_relaxed);
 
     if (ZOO_CONNECTING_STATE == zoo_state) {
         //TODO: support the switch of zookeeper session

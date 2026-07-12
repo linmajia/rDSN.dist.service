@@ -37,6 +37,7 @@
 #include <dsn/utility/singleton.h>
 #include <dsn/utility/synchronize.h>
 
+#include <atomic>
 #include <thread>
 #include <cstring>
 #include <zookeeper.h>
@@ -152,7 +153,7 @@ public:
     int attach(void* callback_owner, const state_callback& cb);
     void detach(void* callback_owner);
 
-    int session_state() const { return zoo_state(_handle); }
+    int session_state() const { return zoo_state(_handle.load(std::memory_order_relaxed)); }
     void visit(zoo_opcontext* op_context);
     void init_non_dsn_thread();
 
@@ -165,7 +166,10 @@ private:
     };
     std::list<watcher_object> _watchers;
     dsn_app_info _srv_node;
-    zhandle_t* _handle;
+    // _handle is written once in attach() under _watcher_lock and read (unlocked)
+    // by global_watcher on the ZooKeeper completion thread; make it atomic so the
+    // cross-thread access is data-race free (see zookeeper_session.cpp).
+    std::atomic<zhandle_t*> _handle;
 
     void dispatch_event(int type, int zstate, const char* path);
     static void global_watcher(
