@@ -42,6 +42,7 @@
 #include <dsn/cpp/utils.h>
 #include <sstream>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 # ifdef __TITLE__
@@ -624,7 +625,19 @@ error_code mutation_log::open(replay_callback read_callback, io_failure_callback
                    fpath.c_str(), log->start_offset(), log->end_offset(), log->end_offset() - log->start_offset());
         }
 
-        dassert(_log_files.find(log->index()) == _log_files.end(), "");
+        // Two on-disk log files could resolve to the same index if the log
+        // directory is corrupt (partial rename, media error, stray copy). This
+        // used to trip a dassert that aborts the entire replica server, taking
+        // down every hosted replica. Reject through the error_code channel so the
+        // caller's existing recovery (fail this replica / rebuild the shared log)
+        // handles it instead of crashing the process.
+        if (_log_files.find(log->index()) != _log_files.end())
+        {
+            derror("duplicate log file index %d detected while opening %s, reject",
+                   log->index(),
+                   fpath.c_str());
+            return ERR_INVALID_DATA;
+        }
         _log_files[log->index()] = log;
     }
 
@@ -1003,11 +1016,12 @@ std::pair<log_file_ptr, int64_t> mutation_log::mark_new_offset(size_t size, bool
     end_offset += sizeof(log_block_header);
 
     // read file header
-    end_offset += log->read_file_header(*reader);
-    if (!log->is_right_header())
+    int file_header_size = log->read_file_header(*reader);
+    if (file_header_size < 0 || !log->is_right_header())
     {
         return ERR_INVALID_DATA;
     }
+    end_offset += file_header_size;
 
     while (true)
     {
@@ -1084,7 +1098,19 @@ std::pair<log_file_ptr, int64_t> mutation_log::mark_new_offset(size_t size, bool
             }
         }
 
-        dassert(logs.find(log->index()) == logs.end(), "");
+        // The file list replayed here can originate from an untrusted source
+        // (e.g. the learnee-supplied learn_response.state.files during learning),
+        // so two entries may resolve to the same log index. Such a duplicate used
+        // to trip a dassert that aborts the whole replica server; reject the replay
+        // through the existing error_code channel so the caller can re-learn or fail
+        // just this operation instead of crashing the process.
+        if (logs.find(log->index()) != logs.end())
+        {
+            derror("duplicate log file index %d detected while replaying %s, reject replay",
+                   log->index(),
+                   fpath.c_str());
+            return ERR_INVALID_DATA;
+        }
         logs[log->index()] = log;
     }
 
@@ -1927,6 +1953,12 @@ log_file::~log_file()
         dwarn("invalid log path %s", path);
         return nullptr;
     }
+    if (start_offset < 0)
+    {
+        err = ERR_INVALID_PARAMETERS;
+        dwarn("invalid negative start offset in log path %s", path);
+        return nullptr;
+    }
 
     dsn_handle_t hfile = dsn_file_open(path, O_RDONLY | O_BINARY, 0);
     if (!hfile)
@@ -1947,6 +1979,15 @@ log_file::~log_file()
     {
         err = ERR_FILE_OPERATION_FAILED;
         derror("get file size of log file %s failed", path);
+        delete lf;
+        return nullptr;
+    }
+    if (file_sz < 0
+        || start_offset > std::numeric_limits<int64_t>::max() - file_sz)
+    {
+        err = ERR_INVALID_PARAMETERS;
+        derror("invalid offset range for log file %s: start = %" PRId64 ", size = %" PRId64,
+            path, start_offset, file_sz);
         delete lf;
         return nullptr;
     }
@@ -1984,8 +2025,8 @@ log_file::~log_file()
     }
 
     binary_reader reader(hdr_blob);
-    lf->read_file_header(reader);
-    if (!lf->is_right_header())
+    int file_header_size = lf->read_file_header(reader);
+    if (file_header_size < 0 || !lf->is_right_header())
     {
         std::string removed = std::string(path) + ".removed";
         derror("invalid log file header of file %s. Rename the file to %s", path, removed.c_str());
@@ -2112,12 +2153,48 @@ error_code log_file::read_next_log_block(/*out*/::dsn::blob& bb)
 
         return err;
     }
-    log_block_header hdr = *reinterpret_cast<const log_block_header*>(bb.data());
+    // bb.data() points into the file_streamer's read buffer at an offset that advances by each
+    // block's (header + body) length, so for every block after the first it is generally
+    // unaligned. Dereferencing a log_block_header* at an unaligned address is undefined behavior
+    // (benign on x86 but a SIGBUS hazard on strict-alignment ISAs such as arm64, and flagged by
+    // UBSan's alignment check). The header bytes were just length-validated above
+    // (bb.length() == sizeof(log_block_header)), so copy them into a naturally aligned local --
+    // mirroring read_pod(), the safe idiom already used by read_file_header().
+    log_block_header hdr;
+    memcpy(static_cast<void*>(&hdr), bb.data(), sizeof(log_block_header));
 
     if (hdr.magic != 0xdeadbeef)
     {
         derror("invalid data header magic: 0x%x", hdr.magic);
         return ERR_INVALID_DATA;
+    }
+
+    // hdr.length is read from the file and, for a learner replaying peer-supplied private log
+    // files (learn_response.state.files during learning), is untrusted. It is passed straight to
+    // read_next(size_t) below: a negative value sign-extends to a huge size_t and makes the
+    // binary_writer(int) constructor throw std::invalid_argument (uncaught in the replay path ->
+    // std::terminate), while an absurdly large positive value drives a multi-gigabyte up-front
+    // allocation (memory-amplification DoS). A real block body can never be larger than the log
+    // file that contains it, so validate hdr.length at this trust boundary before using it,
+    // instead of crashing the whole replica server on malformed remote data.
+    int64_t file_size = end_offset() - start_offset();
+    if (hdr.length < 0)
+    {
+        // A negative length is never valid and would sign-extend to a huge read size.
+        derror("invalid data block length %d (file size %" PRId64 "), path = %s",
+            hdr.length, file_size, _path.c_str());
+        return ERR_INVALID_DATA;
+    }
+    if (static_cast<int64_t>(hdr.length) > file_size)
+    {
+        // The claimed body is larger than the whole log file, so it cannot be fully present.
+        // Treat this as an incomplete (truncated) tail block -- the same outcome the short-read
+        // handling below produces -- rather than allocating hdr.length bytes up front. Returning
+        // ERR_INCOMPLETE_DATA (not ERR_INVALID_DATA) preserves the benign crash-recovery path:
+        // replay() tolerates a truncated tail block but treats ERR_INVALID_DATA as corruption.
+        derror("incomplete data block length %d exceeds file size %" PRId64 ", path = %s",
+            hdr.length, file_size, _path.c_str());
+        return ERR_INCOMPLETE_DATA;
     }
 
     err = _stream->read_next(hdr.length, bb);
@@ -2257,10 +2334,29 @@ int log_file::read_file_header(binary_reader& reader)
      *   log_file_header +
      *   count + count * (gpid + replica_log_info)
      */
+    const int fixed_size = static_cast<int>(sizeof(log_file_header) + sizeof(int));
+    if (reader.get_remaining_size() < fixed_size)
+    {
+        derror("invalid log file header in %s: only %d bytes remain, need at least %d",
+            _path.c_str(), reader.get_remaining_size(), fixed_size);
+        return -1;
+    }
+
     reader.read_pod(_header);
 
     int count;
     reader.read(count);
+    const size_t entry_size = sizeof(gpid) + sizeof(replica_log_info);
+    if (count < 0
+        || static_cast<uint64_t>(count) * entry_size
+            > static_cast<uint64_t>(reader.get_remaining_size()))
+    {
+        derror("invalid log file header in %s: count = %d, remaining bytes = %d",
+            _path.c_str(), count, reader.get_remaining_size());
+        return -1;
+    }
+
+    _previous_log_max_decrees.clear();
     for (int i = 0; i < count; i++)
     {
         gpid gpid;
@@ -2272,7 +2368,7 @@ int log_file::read_file_header(binary_reader& reader)
         _previous_log_max_decrees[gpid] = info;
     }
 
-    return get_file_header_size();
+    return fixed_size + static_cast<int>(static_cast<size_t>(count) * entry_size);
 }
 
 int log_file::get_file_header_size() const

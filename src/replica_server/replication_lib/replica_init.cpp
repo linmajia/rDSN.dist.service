@@ -318,34 +318,38 @@ error_code replica::init_app_and_prepare_list(bool create_new)
             ddebug("%s: clear private log, dir = %s", name(), log_dir.c_str());
             if (!dsn::utils::filesystem::remove_path(log_dir))
             {
-                dassert(false, "Fail to delete directory %s.", log_dir.c_str());
+                derror("%s: fail to delete private log directory %s", name(), log_dir.c_str());
+                err = ERR_FILE_OPERATION_FAILED;
             }
-            if (!::dsn::utils::filesystem::create_directory(log_dir))
+            else if (!::dsn::utils::filesystem::create_directory(log_dir))
             {
-                dassert(false, "Fail to create directory %s.", log_dir.c_str());
+                derror("%s: fail to create private log directory %s", name(), log_dir.c_str());
+                err = ERR_FILE_OPERATION_FAILED;
             }
+            else
+            {
+                _private_log = new mutation_log_private(
+                    log_dir,
+                    _options->log_private_file_size_mb,
+                    get_gpid(),
+                    this,
+                    _options->log_private_batch_buffer_kb * 1024,
+                    _options->log_private_batch_buffer_count
+                    );
+                ddebug("%s: plog_dir = %s", name(), log_dir.c_str());
 
-            _private_log = new mutation_log_private(
-                log_dir,
-                _options->log_private_file_size_mb,
-                get_gpid(),
-                this,
-                _options->log_private_batch_buffer_kb * 1024,
-                _options->log_private_batch_buffer_count
+                err = _private_log->open(nullptr,
+                    [this](error_code err)
+                    {
+                        tasking::enqueue(
+                            LPC_REPLICATION_ERROR,
+                            this,
+                            [this, err]() { handle_local_failure(err); },
+                            gpid_to_thread_hash(get_gpid())
+                            );
+                    }
                 );
-            ddebug("%s: plog_dir = %s", name(), log_dir.c_str());
-
-            err = _private_log->open(nullptr,
-                [this](error_code err)
-                {
-                    tasking::enqueue(
-                        LPC_REPLICATION_ERROR,
-                        this,
-                        [this, err]() { handle_local_failure(err); },
-                        gpid_to_thread_hash(get_gpid())
-                        );
-                }
-            );
+            }
         }
 
         if (err == ERR_OK && !_options->checkpoint_disabled && nullptr == _checkpoint_timer)

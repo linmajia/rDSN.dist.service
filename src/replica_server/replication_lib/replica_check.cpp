@@ -154,6 +154,23 @@ void replica::on_group_check(const group_check_request& request, /*out*/ group_c
         request.last_committed_decree
         );
     
+    // A group check is issued by the partition's current primary to its group members; by
+    // protocol it only ever assigns a follower role and never tells the receiver it is the
+    // primary. A malicious or buggy peer that sets config.status == PS_PRIMARY (or asks a
+    // replica that is currently primary to become a potential secondary directly) would drive
+    // update_local_configuration() / the status switch below through an always-on dassert and
+    // abort the whole replica (RPC is unauthenticated). Reject such a request at the trust
+    // boundary instead of crashing.
+    if (request.config.status == partition_status::PS_PRIMARY
+        || (status() == partition_status::PS_PRIMARY
+            && request.config.status == partition_status::PS_POTENTIAL_SECONDARY))
+    {
+        response.err = ERR_INVALID_STATE;
+        dwarn("%s: on_group_check reject invalid target status %s for local status %s",
+              name(), enum_to_string(request.config.status), enum_to_string(status()));
+        return;
+    }
+
     if (request.config.ballot < get_ballot())
     {
         response.err = ERR_VERSION_OUTDATED;
@@ -190,7 +207,13 @@ void replica::on_group_check(const group_check_request& request, /*out*/ group_c
     case partition_status::PS_ERROR:
         break;
     default:
-        dassert (false, "");
+        // With the trust-boundary check above, a group check never drives this replica into
+        // PS_PRIMARY; reaching here means it is (still) primary -- e.g. a same-ballot check
+        // sent to a primary triggers no status change. Nothing to do; log and ignore instead
+        // of aborting on network input.
+        dwarn("%s: on_group_check ignore check for unexpected local status %s",
+              name(), enum_to_string(status()));
+        break;
     }
     
     response.pid = get_gpid();

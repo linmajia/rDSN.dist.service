@@ -101,6 +101,17 @@ error_code replica_init_info::store(const char* file)
     os.write((const char*)this, sizeof(*this));
     os.close();
 
+    // A failed write or flush (disk full, or a fault-injected I/O error) must not be
+    // promoted to a successful store: renaming a partially written .init-info over the good
+    // file would corrupt the persisted replica metadata and break recovery. Detect the
+    // failure via the stream state, drop the temp file, and keep the original intact.
+    if (!os)
+    {
+        derror("write file %s failed", tmp_file.c_str());
+        ::dsn::utils::filesystem::remove_path(tmp_file);
+        return ERR_FILE_OPERATION_FAILED;
+    }
+
     if (!utils::filesystem::rename_path(tmp_file, ffile))
     {
         derror("move file from %s to %s failed", tmp_file.c_str(), ffile.c_str());
@@ -135,12 +146,32 @@ error_code replica_app_info::load(const char* file)
         return ERR_FILE_OPERATION_FAILED;
     }
 
-    std::shared_ptr<char> buffer(dsn::make_shared_array<char>(sz));
-    is.read((char*)buffer.get(), sz);
-    is.close();
-    
+    // sz is the on-disk size of the .app-info file. A non-positive size denotes a
+    // corrupt/empty file, and make_shared_array(sz) below can throw std::bad_alloc when
+    // the size is absurdly large (disk corruption) or simply when the process is under
+    // memory pressure -- which, under fault injection (libfiu), is exactly the failure
+    // being exercised. That allocation (and the subsequent read) used to sit OUTSIDE the
+    // try/catch, so the throw propagated out of load() and aborted the whole replica while
+    // opening a partition. Reject a bad size up front, and perform the allocation + read
+    // inside the try/catch so an allocation failure or short read is reported as a clean
+    // error instead of crashing.
+    if (sz <= 0)
+    {
+        derror("data in file %s is invalid (size = %lld)", file, (long long)sz);
+        return ERR_INVALID_DATA;
+    }
+
     try
     {
+        std::shared_ptr<char> buffer(dsn::make_shared_array<char>(sz));
+        is.read((char*)buffer.get(), sz);
+        if (!is)
+        {
+            derror("read file %s failed", file);
+            return ERR_FILE_OPERATION_FAILED;
+        }
+        is.close();
+
         binary_reader reader(blob(buffer, sz));
         int magic;
         unmarshall(reader, magic, DSF_THRIFT_BINARY);
@@ -183,6 +214,16 @@ error_code replica_app_info::store(const char* file)
     auto data = writer.get_buffer();
     os.write((const char*)data.data(), (std::streamsize)data.length());
     os.close();
+
+    // See replica_init_info::store: a failed write/flush must not be renamed over the good
+    // file, which would corrupt the persisted app metadata. Drop the temp file and keep the
+    // original on failure instead of reporting success.
+    if (!os)
+    {
+        derror("write file %s failed", tmp_file.c_str());
+        ::dsn::utils::filesystem::remove_path(tmp_file);
+        return ERR_FILE_OPERATION_FAILED;
+    }
 
     if (!utils::filesystem::rename_path(tmp_file, ffile))
     {
@@ -484,8 +525,16 @@ error_code replication_app_base::open_new_internal(replica* r, int64_t shared_lo
     dassert(mu->data.updates.size() > 0, "");
 
     int request_count = static_cast<int>(mu->client_requests.size());
-    dsn_message_t* batched_requests = (dsn_message_t*)alloca(sizeof(dsn_message_t) * request_count);
-    dsn_message_t* faked_requests = (dsn_message_t*)alloca(sizeof(dsn_message_t) * request_count);
+    // request_count comes from the mutation's update count. For a mutation that was
+    // deserialized from an untrusted prepare/learn RPC or an on-disk log block, this count
+    // can be far larger than the ~1MB honest mutation cap (mutation::is_full), so sizing
+    // these two scratch arrays with alloca() would let a malicious or corrupt mutation
+    // overflow the thread stack (SIGSEGV). Use heap-backed storage instead: the allocation
+    // is then bounded by available memory and fails safely rather than smashing the stack.
+    std::vector<dsn_message_t> batched_requests_holder(request_count);
+    std::vector<dsn_message_t> faked_requests_holder(request_count);
+    dsn_message_t* batched_requests = batched_requests_holder.data();
+    dsn_message_t* faked_requests = faked_requests_holder.data();
     int batched_count = 0;
     int faked_count = 0;
     for (int i = 0; i < request_count; i++)

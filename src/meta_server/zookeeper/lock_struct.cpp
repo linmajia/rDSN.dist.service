@@ -424,7 +424,14 @@ void lock_struct::get_lock_owner(bool watch_myself)
         if (output.error != ZOK)
             __execute( std::bind(cb, output.error, nullptr), _this );
         else {
-            std::shared_ptr<std::string> buf(new std::string(output.get_op.value, output.get_op.value_length));
+            // ZooKeeper reports value_length == -1 (with a NULL value pointer) for a node
+            // that exists but carries no data. std::string(NULL, (size_t)-1) would try to
+            // copy SIZE_MAX bytes from a null pointer, crashing the meta server; build an
+            // empty string for the no-data case instead.
+            std::shared_ptr<std::string> buf(
+                (output.get_op.value != nullptr && output.get_op.value_length > 0)
+                    ? new std::string(output.get_op.value, output.get_op.value_length)
+                    : new std::string());
             __execute( std::bind(cb, ZOK, buf), _this );
         }
     };
@@ -528,9 +535,15 @@ void lock_struct::get_lockdir_nodes()
             __execute(std::bind(&lock_struct::after_get_lockdir_nodes, _this, op->_output.error, nullptr), _this);
         else {
             const String_vector* vec = op->_output.getchildren_op.strings;
-            std::shared_ptr< std::vector<std::string> > children(new std::vector<std::string>(vec->count) );
-            for (int i=0; i!=vec->count; ++i)
-                (*children)[i].assign(vec->data[i]);
+            // Guard against a null children vector (global_strings_completion stores the
+            // pointer as-is and only dereferences it behind a != nullptr check), which would
+            // otherwise crash on vec->count below.
+            std::shared_ptr< std::vector<std::string> > children(new std::vector<std::string>());
+            if (vec != nullptr) {
+                children->resize(vec->count);
+                for (int i=0; i!=vec->count; ++i)
+                    (*children)[i].assign(vec->data[i]);
+            }
             __execute(std::bind(&lock_struct::after_get_lockdir_nodes, _this, op->_output.error, children), _this);
         }
     };

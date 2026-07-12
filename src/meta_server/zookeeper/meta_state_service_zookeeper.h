@@ -39,6 +39,8 @@
 #include <dsn/utility/synchronize.h>
 #include <dsn/utility/autoref_ptr.h>
 
+#include <atomic>
+
 namespace dsn{ namespace dist {
 
 class zookeeper_session;
@@ -115,7 +117,11 @@ private:
     typedef ref_ptr<meta_state_service_zookeeper> ref_this;
 
     bool _first_call;
-    int _zoo_state;
+    // _zoo_state is written by on_zoo_session_evt on the ZooKeeper completion
+    // thread and read/written by initialize() on the caller thread; make it
+    // atomic so the concurrent access is data-race free. 0 is a safe
+    // "not connected" default (ZOO_CONNECTED_STATE is non-zero).
+    std::atomic<int> _zoo_state{0};
     zookeeper_session* _session;
     utils::notify_event _notifier;
 

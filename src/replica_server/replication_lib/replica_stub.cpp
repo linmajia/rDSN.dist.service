@@ -45,6 +45,7 @@
 #include <vector>
 #include <deque>
 #include <cstring>
+#include <cctype>
 #include <utility>
 #include <chrono>
 
@@ -1223,10 +1224,43 @@ void replica_stub::on_gc()
     ddebug("finish to garbage collection");
 }
 
+// The app type of a replica is supplied by a remote peer through group-check,
+// add-learner and config-proposal requests, and is used verbatim to build the
+// on-disk replica directory (get_replica_dir -> path_combine). A crafted app
+// type such as "../../etc" would therefore let a malicious peer make the
+// replica server delete and create directories outside its data directories
+// (path traversal). Only accept a single safe path component, mirroring
+// is_valid_package_name() in the app daemon.
+static bool is_valid_app_type(const std::string& app_type)
+{
+    if (app_type.empty() || app_type == "." || app_type == "..")
+    {
+        return false;
+    }
+
+    for (char c : app_type)
+    {
+        unsigned char ch = static_cast<unsigned char>(c);
+        if (!std::isalnum(ch) && c != '_' && c != '-' && c != '.')
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 ::dsn::task_ptr replica_stub::begin_open_replica(const app_info& app, gpid gpid, 
     std::shared_ptr<group_check_request> req,
     std::shared_ptr<configuration_update_request> req2)
 {
+    if (!is_valid_app_type(app.app_type))
+    {
+        derror("open replica '%s.%d.%d' failed coz app type is invalid",
+            app.app_type.c_str(), gpid.get_app_id(), gpid.get_partition_index());
+        return nullptr;
+    }
+
     _replicas_lock.lock();
     if (_replicas.find(gpid) != _replicas.end())
     {

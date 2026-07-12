@@ -41,6 +41,7 @@
 # include <cstdint>
 # include <utility>
 # include <vector>
+# include <new>
 
 # ifdef __TITLE__
 # undef __TITLE__
@@ -341,13 +342,31 @@ void failure_detector::on_ping_internal(const beacon_msg& beacon, /*out*/ beacon
             return;
         }
 
-        // create new entry for node
-        worker_record record(node, now);
-        record.is_alive = true;
-        _workers.insert(std::make_pair(node, record));
+        // create new entry for node.
+        // NOTE: inserting the worker and notifying on_worker_connected both
+        // allocate memory. Under memory pressure (for example an injected
+        // allocation failure) an uncaught std::bad_alloc would escape this rpc
+        // handler and abort the whole process. Because on_ping runs on the
+        // failure-detector master (the meta server), that would take down
+        // cluster-wide failure detection. Instead, roll back any partial
+        // registration and drop this beacon; the peer retries on its next
+        // beacon once memory is available.
+        try
+        {
+            worker_record record(node, now);
+            record.is_alive = true;
+            _workers.insert(std::make_pair(node, record));
 
-        report(node, false, true);
-        on_worker_connected(node);
+            report(node, false, true);
+            on_worker_connected(node);
+        }
+        catch (const std::bad_alloc&)
+        {
+            derror("failed to register new worker[%s] due to memory allocation "
+                "failure, drop this beacon and wait for retry", node.to_string());
+            _workers.erase(node);
+            return;
+        }
     }
     else if (is_time_greater_than(now, itr->second.last_beacon_recv_time))
     {
@@ -358,8 +377,20 @@ void failure_detector::on_ping_internal(const beacon_msg& beacon, /*out*/ beacon
         {
             itr->second.is_alive = true;
 
-            report(node, false, true);
-            on_worker_connected(node);
+            // See the note above: keep the state machine consistent and the
+            // process alive if notifying the reconnect fails to allocate.
+            try
+            {
+                report(node, false, true);
+                on_worker_connected(node);
+            }
+            catch (const std::bad_alloc&)
+            {
+                derror("failed to notify worker[%s] reconnect due to memory "
+                    "allocation failure, retry on next beacon", node.to_string());
+                itr->second.is_alive = false;
+                return;
+            }
         }
     }
 }
