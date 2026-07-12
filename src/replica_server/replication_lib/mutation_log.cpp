@@ -2153,7 +2153,15 @@ error_code log_file::read_next_log_block(/*out*/::dsn::blob& bb)
 
         return err;
     }
-    log_block_header hdr = *reinterpret_cast<const log_block_header*>(bb.data());
+    // bb.data() points into the file_streamer's read buffer at an offset that advances by each
+    // block's (header + body) length, so for every block after the first it is generally
+    // unaligned. Dereferencing a log_block_header* at an unaligned address is undefined behavior
+    // (benign on x86 but a SIGBUS hazard on strict-alignment ISAs such as arm64, and flagged by
+    // UBSan's alignment check). The header bytes were just length-validated above
+    // (bb.length() == sizeof(log_block_header)), so copy them into a naturally aligned local --
+    // mirroring read_pod(), the safe idiom already used by read_file_header().
+    log_block_header hdr;
+    memcpy(static_cast<void*>(&hdr), bb.data(), sizeof(log_block_header));
 
     if (hdr.magic != 0xdeadbeef)
     {
