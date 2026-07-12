@@ -1,4 +1,5 @@
 #include "meta_server_failure_detector.h"
+#include <dsn/cpp/test_output_utils.h>
 #include <dsn/dist/failure_detector_multimaster.h>
 #include <gtest/gtest.h>
 #include <dsn/service_api_cpp.h>
@@ -452,6 +453,7 @@ TEST(fd, switch_new_master_suddenly)
 
 TEST(fd, old_master_died)
 {
+    scoped_test_stderr stderr_capture;
     test_worker* worker;
     std::vector<test_master*> masters;
     ASSERT_TRUE( get_worker_and_master(worker, masters) );
@@ -512,6 +514,7 @@ TEST(fd, old_master_died)
 
 TEST(fd, worker_died_when_switch_master)
 {
+    scoped_test_stderr stderr_capture;
     test_worker* worker;
     std::vector<test_master*> masters;
     ASSERT_TRUE( get_worker_and_master(worker, masters) );

@@ -6,8 +6,10 @@ cases=()
 function run_single()
 {
     prefix=$1
+    output="${prefix}.output"
     echo "${bin} ${prefix}.ini ${prefix}.act"
-    "${bin}" "${prefix}.ini" "${prefix}.act"
+    rm -f -- "${output}"
+    "${bin}" "${prefix}.ini" "${prefix}.act" >"${output}" 2>&1
     ret=$?
     log=$(find . -name log.1.txt -print -quit)
     if [ -n "${log}" ]; then
@@ -16,6 +18,8 @@ function run_single()
     fi
 
     if [ "${ret}" -ne 0 ]; then
+        cat -- "${output}"
+        rm -f -- "${output}"
         echo "run ${prefix} failed, return value = ${ret}"
         if [ -f core ]; then
             echo "---- gdb ./dsn.rep_tests.simple_kv core ----"
@@ -23,6 +27,8 @@ function run_single()
         fi
         exit -1
     fi
+
+    rm -f -- "${output}"
 }
 
 function run_case()

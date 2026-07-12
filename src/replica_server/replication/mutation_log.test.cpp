@@ -33,6 +33,7 @@
  *     xxxx-xx-xx, author, fix bug about xxx
  */
 # include "mutation_log.h"
+# include <dsn/cpp/test_output_utils.h>
 # include <gtest/gtest.h>
 # include <cstdio>
 # include <cstring>
@@ -106,6 +107,7 @@ static void remove_log_file_test_artifacts()
 
 TEST(replication, log_file)
 {
+    scoped_test_stderr stderr_capture;
     remove_log_file_test_artifacts();
 
     replica_log_info_map mdecrees;

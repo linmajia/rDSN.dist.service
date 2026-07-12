@@ -33,6 +33,7 @@
  *     xxxx-xx-xx, author, fix bug about xxx
  */
 # include "mutation_log.h"
+# include <dsn/cpp/test_output_utils.h>
 # include <gtest/gtest.h>
 # include <chrono>
 # include <condition_variable>
@@ -47,6 +48,7 @@ using namespace ::dsn::replication;
 
 TEST(replication, mutation_log_learn)
 {
+    scoped_test_stderr stderr_capture;
     gpid gpid(1, 1);
     std::string str = "hello, world!";
     std::string logp = "./test-log";
@@ -78,7 +80,7 @@ TEST(replication, mutation_log_learn)
         mutations.push_back(mu);
     }
     auto time_toc = std::chrono::steady_clock::now();
-    std::cout << "prepare mutations time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
+    std::cerr << "prepare mutations time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
 
     decree learn_points[] = {584,585,586, 594,595,596,604,605,606 };
 
@@ -98,7 +100,7 @@ TEST(replication, mutation_log_learn)
         }
         mlog->flush();
         time_toc = std::chrono::steady_clock::now();
-        std::cout << "learn_point[" << lp << "]: write time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
+        std::cerr << "learn_point[" << lp << "]: write time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
 
         // gc
         time_tic = std::chrono::steady_clock::now();
@@ -106,14 +108,14 @@ TEST(replication, mutation_log_learn)
         mlog->garbage_collection(gpid, durable_decree, 0);
         mlog->close();
         time_toc = std::chrono::steady_clock::now();
-        std::cout << "learn_point[" << lp << "]: gc time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
+        std::cerr << "learn_point[" << lp << "]: gc time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
 
         // reading logs
         time_tic = std::chrono::steady_clock::now();
         mlog = new mutation_log_private(logp, 1, gpid, nullptr, 1024, 512);
         mlog->open([](mutation_ptr& mu)->bool{ return true; }, nullptr);
         time_toc = std::chrono::steady_clock::now();
-        std::cout << "learn_point[" << lp << "]: read time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
+        std::cerr << "learn_point[" << lp << "]: read time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
 
         // learning
         time_tic = std::chrono::steady_clock::now();
@@ -122,7 +124,7 @@ TEST(replication, mutation_log_learn)
         mlog->close();
         mlog = nullptr;
         time_toc = std::chrono::steady_clock::now();
-        std::cout << "learn_point[" << lp << "]: learn time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
+        std::cerr << "learn_point[" << lp << "]: learn time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
 
         // replaying
         time_tic = std::chrono::steady_clock::now();
@@ -162,7 +164,7 @@ TEST(replication, mutation_log_learn)
             offset
             ).end_tracking();
         time_toc = std::chrono::steady_clock::now();
-        std::cout << "learn_point[" << lp << "]: replay time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
+        std::cerr << "learn_point[" << lp << "]: replay time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
 
         // checking
         time_tic = std::chrono::steady_clock::now();
@@ -172,7 +174,7 @@ TEST(replication, mutation_log_learn)
             ASSERT_TRUE(it != learned_decress.end());
         }
         time_toc = std::chrono::steady_clock::now();
-        std::cout << "learn_point[" << lp << "]: check time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
+        std::cerr << "learn_point[" << lp << "]: check time(us): " << std::chrono::duration_cast<std::chrono::microseconds>(time_toc - time_tic).count() << std::endl;
 
         // clear all
         utils::filesystem::remove_path(logp);
