@@ -417,7 +417,15 @@ void meta_state_service_zookeeper::visit_zookeeper_internal(
         tsk->bind_and_enqueue(
             [op](meta_state_service::err_value_callback& cb){
                 blob data;
-                if (ZOK == op->_output.error) {
+                // The ZooKeeper C client reports value_length == -1 (with a NULL value
+                // pointer) when a node exists but carries no data, which happens for any
+                // node created with an empty value (meta_state_service::create_node defaults
+                // to an empty blob). Passing that -1 into make_shared_array<char>() below
+                // would request new char[(size_t)-1], throwing std::bad_alloc/std::length_error
+                // out of this task callback (exec_internal has no try/catch) and aborting the
+                // meta server; the subsequent memcpy() from a NULL value would also crash.
+                // Only copy when there is real data; otherwise return an empty blob.
+                if (ZOK == op->_output.error && op->_output.get_op.value_length > 0) {
                     std::shared_ptr<char> buf(dsn::make_shared_array<char>(op->_output.get_op.value_length));
                     memcpy(buf.get(), op->_output.get_op.value, op->_output.get_op.value_length);
                     data.assign(buf, 0, op->_output.get_op.value_length);
@@ -434,9 +442,14 @@ void meta_state_service_zookeeper::visit_zookeeper_internal(
             std::vector<std::string> result;
             if (ZOK == op->_output.error) {
                 const String_vector* vec = op->_output.getchildren_op.strings;
-                result.resize(vec->count);
-                for (int i=0; i!=vec->count; ++i)
-                    result[i].assign(vec->data[i]);
+                // Guard against a null children vector: global_strings_completion stores the
+                // pointer as-is and itself only dereferences it after a != nullptr check, so a
+                // ZOK reply with a null vector would otherwise crash the meta server here.
+                if (vec != nullptr) {
+                    result.resize(vec->count);
+                    for (int i=0; i!=vec->count; ++i)
+                        result[i].assign(vec->data[i]);
+                }
             }
             return std::bind(cb, from_zerror(op->_output.error), result);
         });
