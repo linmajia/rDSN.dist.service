@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <dsn/cpp/test_output_utils.h>
 #include <dump_file.h>
 #include <cstring>
 #include <cstdint>
@@ -7,6 +8,7 @@
 
 TEST(dump_file, read_write)
 {
+    scoped_test_stderr stderr_capture;
     unsigned int total_length = 4096;
     std::shared_ptr<char> buffer(dsn::make_shared_array<char>(total_length));
     char* ptr = buffer.get();

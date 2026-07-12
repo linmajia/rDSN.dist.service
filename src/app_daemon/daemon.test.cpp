@@ -35,6 +35,7 @@
 
 
 # include "daemon.server.h"
+# include <dsn/cpp/test_output_utils.h>
 # include <dsn/cpp/utils.h>
 # include <gtest/gtest.h>
 # include <chrono>
@@ -122,6 +123,7 @@ void kill_test_server()
 
 TEST(daemon, test_server_response)
 {
+    scoped_test_stderr stderr_capture;
     // start service
     create_test_server();
 
@@ -143,7 +145,7 @@ TEST(daemon, test_server_response)
         last_err = resp.first;
         last_resp = resp.second;
 
-        printf("%d-th: err = %s, resp = %s\n",
+        fprintf(stderr, "%d-th: err = %s, resp = %s\n",
             i,
             last_err.to_string(),
             last_resp.c_str()

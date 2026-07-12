@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include <gtest/gtest.h>
+#include <dsn/cpp/test_output_utils.h>
 #include <dsn/service_api_cpp.h>
 
 #include "meta_service_test_app.h"
@@ -12,6 +13,7 @@ meta_service_test_app* g_app;
 
 TEST(meta, state_sync)
 {
+    scoped_test_stderr stderr_capture;
     g_app->state_sync_test();
 }
 
@@ -27,6 +29,7 @@ TEST(meta, update_configuration)
 
 TEST(meta, balancer_validator)
 {
+    scoped_test_stderr stderr_capture;
     g_app->balancer_validator();
 }
 
