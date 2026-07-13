@@ -100,7 +100,7 @@ void simple_kv_client_app::run()
     dsn::replication::config_type::type type;
     rpc_address node;
 
-    while (!g_done)
+    while (!g_done.load(std::memory_order_acquire))
     {
         if (test_case::fast_instance().check_client_write(id, key, value, timeout_ms))
         {
@@ -187,4 +187,3 @@ void simple_kv_client_app::begin_read(int id, const std::string& key, int timeou
 
 
 }}}
-

@@ -499,14 +499,14 @@ void mutation_log_testcase(uint64_t block_size, size_t concurrency, bool is_writ
     
     std::atomic<uint64_t> io_count(0);
     std::atomic<uint64_t> cb_flying_count(0);
-    volatile bool exit = false;
+    std::atomic<bool> exit(false);
     std::function<void(int)> cb;
     std::vector<uint64_t> offsets;
     offsets.resize(concurrency);
 
     cb = [&](int index)
     {
-        if (!exit)
+        if (!exit.load(std::memory_order_relaxed))
         {
             cb_flying_count++;
             if (is_write)
@@ -583,7 +583,7 @@ void mutation_log_testcase(uint64_t block_size, size_t concurrency, bool is_writ
     }
 
     // safe exit
-    exit = true;
+    exit.store(true, std::memory_order_relaxed);
 
     while (cb_flying_count.load() > 0)
     {
@@ -605,4 +605,3 @@ TEST(perf_replication, mutation_log)
                         for (auto shared : { false, true})
                             mutation_log_testcase(blk_size_bytes, concurrency, is_write, force_flush, shared);
 }
-

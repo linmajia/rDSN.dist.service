@@ -33,6 +33,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <dsn/dist/distributed_lock_service.h>
 #include <unordered_map>
 #include "lock_types.h"
@@ -103,7 +104,7 @@ private:
     cache_map _lock_cache;
 
     zookeeper_session* _session;
-    int _zoo_state;
+    std::atomic<int> _zoo_state{0};
     bool _first_call;
     utils::notify_event _waiting_attach;
 

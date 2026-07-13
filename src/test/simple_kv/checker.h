@@ -50,7 +50,8 @@ using ::dsn::service::meta_service_app;
 class test_checker : public dsn::utils::singleton<test_checker>
 {
 public:
-    static bool s_inited;
+    static std::atomic<bool> s_app_info_ready;
+    static std::atomic<bool> s_inited;
 
 public:
     test_checker();
@@ -98,8 +99,8 @@ public:
         _checker = &test_checker::instance();
         if (!_checker->init(name, info, count))
         {
-            g_done = true;
-            g_fail = true;
+            g_fail.store(true, std::memory_order_relaxed);
+            g_done.store(true, std::memory_order_release);
         }
     }
 
@@ -115,4 +116,3 @@ private:
 void install_checkers();
 
 }}}
-

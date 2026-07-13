@@ -53,15 +53,7 @@ using namespace ::dsn::service;
 namespace dsn { 
 namespace fd {
 
-failure_detector::failure_detector()
-{
-    dsn_threadpool_code_t pool;
-    dsn_task_code_query(LPC_BEACON_CHECK, nullptr, nullptr, &pool);
-    dsn_task_code_set_threadpool(RPC_FD_FAILURE_DETECTOR_PING, pool);
-    dsn_task_code_set_threadpool(RPC_FD_FAILURE_DETECTOR_PING_ACK, pool);
-
-    _is_started = false;
-}
+failure_detector::failure_detector() {}
 
 error_code failure_detector::start(
     uint32_t check_interval_seconds, 
@@ -88,18 +80,18 @@ error_code failure_detector::start(
         -1,
         std::chrono::milliseconds(_check_interval_milliseconds));
 
-    _is_started = true;
+    _is_started.store(true, std::memory_order_relaxed);
     return ERR_OK;
 }
 
 error_code failure_detector::stop()
 {
-    if ( _is_started == false )
+    if (!_is_started.load(std::memory_order_relaxed))
     {
         return ERR_OK;
     }
 
-    _is_started = false;
+    _is_started.store(false, std::memory_order_relaxed);
 
     close_service();
 
@@ -231,7 +223,7 @@ void failure_detector::report(::dsn::rpc_address node, bool is_master, bool is_c
 
 void failure_detector::check_all_records()
 {
-    if (!_is_started)
+    if (!_is_started.load(std::memory_order_relaxed))
     {
         return;
     }

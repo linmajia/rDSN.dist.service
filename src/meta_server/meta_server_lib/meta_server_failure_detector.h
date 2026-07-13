@@ -35,6 +35,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <dsn/dist/failure_detector.h>
 #include <dsn/dist/distributed_lock_service.h>
 #include "replication_common.h"
@@ -49,7 +50,7 @@ public:
     meta_server_failure_detector(meta_service* svc);
     virtual ~meta_server_failure_detector();
 
-    bool is_primary() const { return _is_primary; }
+    bool is_primary() const { return _is_primary.load(std::memory_order_relaxed); }
     rpc_address get_primary();
     
     void acquire_leader_lock();
@@ -74,7 +75,7 @@ public:
     {
         //we treat all nodes not in the worker list alive in the first grace period
         //for those in the worker list, they are surely alive
-        if (_election_moment+get_grace_ms() < dsn_now_ms())
+        if (dsn_now_ms() - _election_moment.load(std::memory_order_relaxed) < get_grace_ms())
         {
             return true;
         }
@@ -93,7 +94,7 @@ private:
     meta_service  *_svc;
 
     zlock         _primary_address_lock;
-    volatile bool _is_primary;
+    std::atomic<bool> _is_primary{false};
     rpc_address   _primary_address;
 
     dist::distributed_lock_service *_lock_svc;
@@ -101,7 +102,7 @@ private:
     task_ptr    _lock_expire_task;
     std::string _primary_lock_id;
     std::string _lock_owner_id;
-    volatile uint64_t    _election_moment;
+    std::atomic<uint64_t> _election_moment{0};
 
 public:
     /* these two functions are for test */
@@ -110,4 +111,3 @@ public:
 };
 
 }}
-

@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <atomic>
 #include <dsn/service_api_cpp.h>
 #include <thread>
 #include <chrono>
@@ -13,12 +14,14 @@ using namespace dsn::dist;
 
 DEFINE_TASK_CODE(DLOCK_CALLBACK, TASK_PRIORITY_HIGH, THREAD_POOL_DEFAULT)
 
-bool ss_start = false;
-bool ss_finish = false;
+std::atomic<bool> ss_start(false);
+std::atomic<bool> ss_finish(false);
 
 std::vector<int64_t> q;
-int pos=0;
-int64_t result = 0;
+std::atomic<size_t> pos(0);
+std::atomic<int64_t> result(0);
+std::atomic<int> active_work_sections(0);
+std::atomic<int> finished_servers(0);
 
 class simple_adder_server: public dsn::service_app
 {
@@ -30,13 +33,16 @@ public:
         ddebug("name: %s, argc=%d", name().c_str(), argc);
         for (int i=0; i!=argc; ++i)
             ddebug("argv: %s", argv[i]);
-        while (!ss_start) std::this_thread::sleep_for(std::chrono::seconds(1));
+        while (!ss_start.load(std::memory_order_acquire))
+        {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
         
         _dlock_service = new distributed_lock_service_zookeeper();
         dassert(_dlock_service->initialize({"/dsn/tests/simple_adder_server"}) == ERR_OK, "");
         
         distributed_lock_service::lock_options opt = {true, true};
-        while (!ss_finish) {
+        while (!ss_finish.load(std::memory_order_acquire)) {
             std::pair<task_ptr, task_ptr> task_pair = _dlock_service->lock(
                 "test_lock", name(), 
                 DLOCK_CALLBACK, 
@@ -57,15 +63,21 @@ public:
                 opt
             );
             task_pair.first->wait();
+            EXPECT_EQ(0, active_work_sections.fetch_add(1, std::memory_order_acq_rel));
+            bool all_work_finished = false;
             for (int i=0; i<1000; ++i)
             {
-                if (pos>=q.size()) 
+                size_t current_pos = pos.fetch_add(1, std::memory_order_relaxed);
+                if (current_pos >= q.size())
                 {
-                    ss_finish = true;
+                    all_work_finished = true;
                     break;
                 }
-                result += q[pos++];
+                result.fetch_add(q[current_pos], std::memory_order_relaxed);
             }
+            // The unlock callback can run after ZooKeeper has already granted the
+            // next owner, so track only the protected work interval.
+            EXPECT_EQ(1, active_work_sections.fetch_sub(1, std::memory_order_acq_rel));
             task_ptr unlock_task = _dlock_service->unlock(
                 "test_lock", name(), true, 
                 DLOCK_CALLBACK, 
@@ -76,8 +88,14 @@ public:
             );
             unlock_task->wait();
             task_pair.second->cancel(false);
+            if (all_work_finished)
+            {
+                ss_finish.store(true, std::memory_order_release);
+            }
         }
 
+        // The acq_rel RMW chain publishes every server's work to the test thread.
+        finished_servers.fetch_add(1, std::memory_order_acq_rel);
         return ERR_OK;
     }
 
@@ -92,10 +110,14 @@ private:
 
 TEST(distributed_lock_service_zookeeper, simple_lock_unlock)
 {
-    pos = 0;
-    result = 0;
-    ss_start = false;
-    ss_finish = false;
+    ss_start.store(false, std::memory_order_relaxed);
+    ss_finish.store(false, std::memory_order_relaxed);
+    active_work_sections.store(0, std::memory_order_relaxed);
+    finished_servers.store(0, std::memory_order_relaxed);
+
+    int64_t expect_reuslt = 0;
+    pos.store(0, std::memory_order_relaxed);
+    result.store(0, std::memory_order_relaxed);
     q.clear();
 
     srand( time(0) );
@@ -104,17 +126,18 @@ TEST(distributed_lock_service_zookeeper, simple_lock_unlock)
         int64_t rand1 = rand()%10000;
         int64_t rand2 = rand()%10000;
         q.push_back( rand1*rand2 );
+        expect_reuslt += q.back();
     }
 
-    int64_t expect_reuslt = 0;
-    for (int64_t i: q) expect_reuslt += i;
-
-    ss_start = true;
-    while ( !ss_finish )
+    ss_start.store(true, std::memory_order_release);
+    while (finished_servers.load(std::memory_order_acquire) < 3)
+    {
         std::this_thread::sleep_for( std::chrono::seconds(1) );
+    }
 
-    ddebug("actual result: %lld, expect_result:%lld", result, expect_reuslt);
-    EXPECT_TRUE(result==expect_reuslt);
+    int64_t actual_result = result.load(std::memory_order_relaxed);
+    ddebug("actual result: %lld, expect_result:%lld", actual_result, expect_reuslt);
+    EXPECT_TRUE(actual_result==expect_reuslt);
 }
 
 TEST(distributed_lock_service_zookeeper, abnormal_api_call)

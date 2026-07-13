@@ -39,6 +39,7 @@
 #include "zookeeper_error.h"
 #include <cstring>
 #include <functional>
+#include <limits>
 
 # ifdef __TITLE__
 # undef __TITLE__
@@ -170,9 +171,17 @@ error_code meta_state_service_zookeeper::initialize(const std::vector<std::strin
     }
 
     _session = zookeeper_session_mgr::instance().get_session(&node);
-    _zoo_state.store(_session->attach(this, std::bind(&meta_state_service_zookeeper::on_zoo_session_evt,
-                                                  ref_this(this),
-                                                  std::placeholders::_1) ), std::memory_order_relaxed);
+    const int uninitialized_zoo_state = std::numeric_limits<int>::min();
+    _zoo_state.store(uninitialized_zoo_state, std::memory_order_relaxed);
+    int attached_zoo_state =
+        _session->attach(this,
+                         std::bind(&meta_state_service_zookeeper::on_zoo_session_evt,
+                                   ref_this(this),
+                                   std::placeholders::_1));
+    int expected_zoo_state = uninitialized_zoo_state;
+    _zoo_state.compare_exchange_strong(expected_zoo_state,
+                                       attached_zoo_state,
+                                       std::memory_order_relaxed);
     if (_zoo_state.load(std::memory_order_relaxed) != ZOO_CONNECTED_STATE)
     {
         _notifier.wait_for( zookeeper_session_mgr::fast_instance().timeout() );

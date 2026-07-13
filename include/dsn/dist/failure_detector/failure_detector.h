@@ -58,6 +58,7 @@
 
 # include <dsn/dist/failure_detector/fd.client.h>
 # include <dsn/dist/failure_detector/fd.server.h>
+# include <atomic>
 # include <cstdint>
 # include <vector>
 # include <unordered_map>
@@ -65,7 +66,6 @@
 
 namespace dsn { namespace fd {
 
-DEFINE_THREAD_POOL_CODE(THREAD_POOL_FD)
 DEFINE_TASK_CODE(LPC_BEACON_CHECK, TASK_PRIORITY_HIGH, THREAD_POOL_FD)
 DEFINE_TASK_CODE(LPC_BEACON_SEND, TASK_PRIORITY_HIGH, THREAD_POOL_FD)
 
@@ -200,7 +200,7 @@ private:
     uint32_t             _check_interval_milliseconds;
     uint32_t             _lease_milliseconds;
     uint32_t             _grace_milliseconds;
-    bool                 _is_started;
+    std::atomic<bool>     _is_started{false};
     ::dsn::task_ptr      _check_task;
 
     bool                 _use_allow_list;
