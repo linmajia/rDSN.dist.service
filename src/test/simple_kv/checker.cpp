@@ -62,15 +62,17 @@ namespace dsn { namespace replication { namespace test {
 class checker_load_balancer: public simple_load_balancer
 {
 public:
-    static bool s_disable_balancer;
+    static std::atomic<bool> s_disable_balancer;
 public:
     checker_load_balancer(meta_service* svc): simple_load_balancer(svc) {}
     pc_status cure(const meta_view &view, const dsn::gpid& gpid, configuration_proposal_action &action) override
     {
         const partition_configuration& pc = *get_config(*view.apps, gpid);
         action.type = config_type::CT_INVALID;
-        if (s_disable_balancer)
+        if (s_disable_balancer.load(std::memory_order_relaxed))
+        {
             return pc_status::healthy;
+        }
 
         pc_status result;
         if (pc.primary.is_invalid())
@@ -132,8 +134,9 @@ public:
     }
 };
 
-bool test_checker::s_inited = false;
-bool checker_load_balancer::s_disable_balancer = false;
+std::atomic<bool> test_checker::s_app_info_ready{false};
+std::atomic<bool> test_checker::s_inited{false};
+std::atomic<bool> checker_load_balancer::s_disable_balancer{false};
 
 test_checker::test_checker()
 {
@@ -141,7 +144,7 @@ test_checker::test_checker()
 
 void test_checker::control_balancer(bool disable_it)
 {
-    checker_load_balancer::s_disable_balancer = disable_it;
+    checker_load_balancer::s_disable_balancer.store(disable_it, std::memory_order_relaxed);
     if (disable_it && meta_leader()) {
         server_state* ss = meta_leader()->_service->_state.get();
         for (auto& kv: ss->_exist_apps) {
@@ -153,8 +156,10 @@ void test_checker::control_balancer(bool disable_it)
 
 bool test_checker::init(const char* name, dsn_app_info* info, int count)
 {
-    if (s_inited)
+    if (s_inited.load(std::memory_order_acquire))
+    {
         return false;
+    }
 
     _apps.resize(count);
     for (int i = 0; i < count; i++)
@@ -206,25 +211,29 @@ bool test_checker::init(const char* name, dsn_app_info* info, int count)
         }
     }
 
-    s_inited = true;
+    s_app_info_ready.store(true, std::memory_order_release);
 
     if (!test_case::instance().init(g_case_input))
     {
         std::cerr << "init test_case failed" << std::endl;
-        s_inited = false;
+        s_app_info_ready.store(false, std::memory_order_relaxed);
         return false;
     }
 
+    s_inited.store(true, std::memory_order_release);
     return true;
 }
 
 void test_checker::exit()
 {
-    if (!s_inited) return;
+    if (!s_inited.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     for (meta_service_app* app : _meta_servers)
     {
-        app->_service->_started = false;
+        app->_service->_started.store(false, std::memory_order_relaxed);
     }
 
     if (test_case::s_close_replica_stub_on_exit)
@@ -237,7 +246,10 @@ void test_checker::exit()
 void test_checker::check()
 {
     test_case::instance().on_check();
-    if (g_done) return;
+    if (g_done.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     // 'config_change' and 'replica_state_change' are detected in two ways:
     //   - each time this check() is called, checking will be applied
@@ -397,4 +409,3 @@ void install_checkers()
 }
 
 }}}
-

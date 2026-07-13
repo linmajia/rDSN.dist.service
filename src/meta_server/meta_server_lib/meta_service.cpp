@@ -120,8 +120,10 @@ void meta_service::set_node_state(const std::vector<rpc_address> &nodes, bool is
             _dead_set.insert(node);
         }
     }
-    if (!_started)
+    if (!_started.load(std::memory_order_acquire))
+    {
         return;
+    }
     for (const rpc_address& address: nodes) {
         tasking::enqueue(
             LPC_META_STATE_HIGH,
@@ -161,7 +163,7 @@ void meta_service::service_starting()
 {
     zauto_read_lock l(_meta_lock);
 
-    _started = true;
+    _started.store(true, std::memory_order_release);
     std::list< std::pair<rpc_address, bool> > nodes;
     for (const rpc_address& node: _alive_set) {
         nodes.push_back( std::make_pair(node, true) );
@@ -190,7 +192,7 @@ void meta_service::service_starting()
 
 error_code meta_service::start()
 {
-    dassert(!_started, "meta service is already started");
+    dassert(!_started.load(std::memory_order_relaxed), "meta service is already started");
     error_code err;
 
     err = remote_storage_initialize();
@@ -337,7 +339,7 @@ int meta_service::check_primary(dsn_message_t req)
     dinfo("rpc %s called", __FUNCTION__);\
     int result = check_primary(dsn_msg);\
     if (result == 0) return;\
-    if (result == -1 || !_started) {\
+    if (result == -1 || !_started.load(std::memory_order_acquire)) {\
         response_struct.err = (result==-1)?ERR_FORWARD_TO_OTHERS:ERR_SERVICE_NOT_ACTIVE;\
         reply(dsn_msg, response_struct);\
         return;\
@@ -560,19 +562,21 @@ void meta_service::on_control_meta(dsn_message_t req)
         return;
     }
     ddebug("get control meta rpc, flags(%" PRIx64 "), type(%d), current flags(%" PRIx64 ")",
-           static_cast<uint64_t>(request.ctrl_flags), request.ctrl_type, static_cast<uint64_t>(_meta_ctrl_flags));
+           static_cast<uint64_t>(request.ctrl_flags),
+           request.ctrl_type,
+           static_cast<uint64_t>(_meta_ctrl_flags.load(std::memory_order_relaxed)));
     {
         zauto_write_lock l(_meta_lock);
         switch (request.ctrl_type)
         {
         case meta_ctrl_type::meta_flags_and:
-            _meta_ctrl_flags &= request.ctrl_flags;
+            _meta_ctrl_flags.fetch_and(request.ctrl_flags, std::memory_order_relaxed);
             break;
         case meta_ctrl_type::meta_flags_or:
-            _meta_ctrl_flags |= request.ctrl_flags;
+            _meta_ctrl_flags.fetch_or(request.ctrl_flags, std::memory_order_relaxed);
             break;
         case meta_ctrl_type::meta_flags_overwrite:
-            _meta_ctrl_flags = request.ctrl_flags;
+            _meta_ctrl_flags.store(request.ctrl_flags, std::memory_order_relaxed);
             break;
         default:
             ddebug("invalid requst ctrl type: %d", request.ctrl_type);

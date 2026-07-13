@@ -88,7 +88,7 @@ int main(int argc, char** argv)
     // specify what services and tools will run in config file, then run
     dsn_run(argc - 1, argv, false);
 
-    while (!dsn::replication::test::g_done)
+    while (!dsn::replication::test::g_done.load(std::memory_order_acquire))
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -97,7 +97,7 @@ int main(int argc, char** argv)
 
     dsn::replication::test::test_checker::instance().exit();
 
-    if (dsn::replication::test::g_fail)
+    if (dsn::replication::test::g_fail.load(std::memory_order_relaxed))
     {
 #ifndef ENABLE_GCOV
         dsn_exit(-1);

@@ -66,7 +66,6 @@ replica_stub::replica_stub(replica_state_subscriber subscriber /*= nullptr*/, bo
     _replica_state_subscriber = subscriber;
     _is_long_subscriber = is_long_subscriber;
     _failure_detector = nullptr;
-    _state = NS_Disconnected;
     _log = nullptr;
     _create_time_ms = now_ms();
     install_perf_counters();
@@ -439,7 +438,7 @@ void replica_stub::initialize_start()
     }
     
     // init liveness monitor
-    dassert (NS_Disconnected == _state, "");
+    dassert(NS_Disconnected == _state.load(std::memory_order_relaxed), "");
     if (_options.fd_disabled == false)
     {
         _failure_detector = new ::dsn::dist::slave_failure_detector_with_multimaster(
@@ -460,7 +459,7 @@ void replica_stub::initialize_start()
     }
     else
     {
-        _state = NS_Connected;
+        _state.store(NS_Connected, std::memory_order_relaxed);
     }
 }
 
@@ -837,7 +836,7 @@ void replica_stub::static_replica_stub_json_state_freer(dsn_cli_reply reply)
 
 void replica_stub::query_configuration_by_node()
 {
-    if (_state == NS_Disconnected)
+    if (_state.load(std::memory_order_relaxed) == NS_Disconnected)
     {
         return;
     }
@@ -874,9 +873,9 @@ void replica_stub::on_meta_server_connected()
     ddebug("meta server connected");
 
     zauto_lock l(_replicas_lock);
-    if (_state == NS_Disconnected)
+    if (_state.load(std::memory_order_relaxed) == NS_Disconnected)
     {
-        _state = NS_Connecting;
+        _state.store(NS_Connecting, std::memory_order_relaxed);
         query_configuration_by_node();
     }
 }
@@ -889,7 +888,7 @@ void replica_stub::on_node_query_reply(error_code err, dsn_message_t request, ds
     _config_query_task = nullptr;
     if (err != ERR_OK)
     {
-        if (_state == NS_Connecting)
+        if (_state.load(std::memory_order_relaxed) == NS_Connecting)
         {
             query_configuration_by_node();
         }
@@ -901,21 +900,23 @@ void replica_stub::on_node_query_reply(error_code err, dsn_message_t request, ds
         if (decode_err != ERR_OK)
         {
             derror("invalid query node partitions response: %s", decode_err.to_string());
-            if (_state == NS_Connecting)
+            if (_state.load(std::memory_order_relaxed) == NS_Connecting)
             {
                 query_configuration_by_node();
             }
             return;
         }
 
-        if (_state == NS_Connecting)
+        if (_state.load(std::memory_order_relaxed) == NS_Connecting)
         {
-            _state = NS_Connected;
+            _state.store(NS_Connected, std::memory_order_relaxed);
         }
 
         // DO NOT UPDATE STATE WHEN DISCONNECTED
-        if (_state != NS_Connected)
+        if (_state.load(std::memory_order_relaxed) != NS_Connected)
+        {
             return;
+        }
 
         if (resp.err == ERR_BUSY)
         {
@@ -964,8 +965,8 @@ void replica_stub::on_node_query_reply(error_code err, dsn_message_t request, ds
 void replica_stub::set_meta_server_connected_for_test(const configuration_query_by_node_response& resp)
 {
     zauto_lock l(_replicas_lock);
-    dassert (_state != NS_Connected, "");
-    _state = NS_Connected;
+    dassert(_state.load(std::memory_order_relaxed) != NS_Connected, "");
+    _state.store(NS_Connected, std::memory_order_relaxed);
 
     for (auto it = resp.partitions.begin(); it != resp.partitions.end(); ++it)
     {
@@ -1070,10 +1071,12 @@ void replica_stub::on_meta_server_disconnected()
     ddebug("meta server disconnected");
 
     zauto_lock l(_replicas_lock);
-    if (NS_Disconnected == _state)
+    if (NS_Disconnected == _state.load(std::memory_order_relaxed))
+    {
         return;
+    }
 
-    _state = NS_Disconnected;
+    _state.store(NS_Disconnected, std::memory_order_relaxed);
 
     for (auto it = _replicas.begin(); it != _replicas.end(); ++it)
     {
@@ -1091,8 +1094,10 @@ void replica_stub::on_meta_server_disconnected_scatter(replica_stub_ptr this_, g
 {
     {
         zauto_lock l(_replicas_lock);
-        if (_state != NS_Disconnected)
+        if (_state.load(std::memory_order_relaxed) != NS_Disconnected)
+        {
             return;
+        }
     }
 
     replica_ptr replica = get_replica(gpid);
@@ -1521,7 +1526,7 @@ void replica_stub::close()
         _config_query_task->cancel(true);
         _config_query_task = nullptr;
     }
-    _state = NS_Disconnected;
+    _state.store(NS_Disconnected, std::memory_order_relaxed);
     
     if (_gc_timer_task != nullptr)
     {

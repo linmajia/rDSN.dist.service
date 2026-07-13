@@ -44,6 +44,7 @@
 # include "replication_common.h"
 # include <dsn/cpp/perf_counter_.h>
 # include <dsn/dist/failure_detector_multimaster.h>
+# include <atomic>
 # include <memory>
 # include <functional>
 # include <utility>
@@ -129,7 +130,10 @@ public:
     replica_ptr get_replica(gpid gpid, bool new_when_possible = false, const app_info* app = nullptr);
     replica_ptr get_replica(int32_t app_id, int32_t partition_index);
     replication_options& options() { return _options; }
-    bool is_connected() const { return NS_Connected == _state; }
+    bool is_connected() const
+    {
+        return NS_Connected == _state.load(std::memory_order_relaxed);
+    }
 
     //void json_state(std::stringstream& out) const;
 
@@ -182,7 +186,7 @@ private:
     ::dsn::rpc_address          _primary_address;
 
     ::dsn::dist::slave_failure_detector_with_multimaster *_failure_detector;
-    volatile replica_node_state _state;
+    std::atomic<replica_node_state> _state{NS_Disconnected};
 
     // constants
     replication_options         _options;

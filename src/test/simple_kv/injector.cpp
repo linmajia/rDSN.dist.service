@@ -51,7 +51,10 @@ namespace dsn { namespace replication { namespace test {
 
 static void inject_on_task_enqueue(task* caller, task* callee)
 {
-    if (!test_checker::s_inited) return;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     event_on_task_enqueue event;
     event.init(callee);
@@ -61,7 +64,10 @@ static void inject_on_task_enqueue(task* caller, task* callee)
 
 static void inject_on_task_begin(task* this_)
 {
-    if (!test_checker::s_inited) return;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     event_on_task_begin event;
     event.init(this_);
@@ -71,7 +77,10 @@ static void inject_on_task_begin(task* this_)
 
 static void inject_on_task_end(task* this_)
 {
-    if (!test_checker::s_inited) return;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     event_on_task_end event;
     event.init(this_);
@@ -81,7 +90,10 @@ static void inject_on_task_end(task* this_)
 
 static void inject_on_task_cancelled(task* this_)
 {
-    if (!test_checker::s_inited) return;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     event_on_task_cancelled event;
     event.init(this_);
@@ -91,22 +103,34 @@ static void inject_on_task_cancelled(task* this_)
 
 static void inject_on_task_wait_pre(task* caller, task* callee, uint32_t timeout_ms)
 {
-    if (!test_checker::s_inited) return;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return;
+    }
 }
 
 static void inject_on_task_wait_post(task* caller, task* callee, bool succ)
 {
-    if (!test_checker::s_inited) return;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return;
+    }
 }
 
 static void inject_on_task_cancel_post(task* caller, task* callee, bool succ)
 {
-    if (!test_checker::s_inited) return;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return;
+    }
 }
 
 static bool inject_on_aio_call(task* caller, aio_task* callee)
 {
-    if (!test_checker::s_inited) return true;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return true;
+    }
 
     event_on_aio_call event;
     event.init(callee);
@@ -116,7 +140,10 @@ static bool inject_on_aio_call(task* caller, aio_task* callee)
 
 static void inject_on_aio_enqueue(aio_task* this_)
 {
-    if (!test_checker::s_inited) return;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     event_on_aio_enqueue event;
     event.init(this_);
@@ -126,7 +153,10 @@ static void inject_on_aio_enqueue(aio_task* this_)
 
 static bool inject_on_rpc_call(task* caller, message_ex* req, rpc_response_task* callee)
 {
-    if (!test_checker::s_inited) return true;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return true;
+    }
 
     event_on_rpc_call event;
     event.init(req, nullptr);
@@ -136,7 +166,10 @@ static bool inject_on_rpc_call(task* caller, message_ex* req, rpc_response_task*
 
 static bool inject_on_rpc_request_enqueue(rpc_request_task* callee)
 {
-    if (!test_checker::s_inited) return true;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return true;
+    }
 
     event_on_rpc_request_enqueue event;
     event.init(callee);
@@ -146,7 +179,10 @@ static bool inject_on_rpc_request_enqueue(rpc_request_task* callee)
 
 static bool inject_on_rpc_reply(task* caller, message_ex* msg)
 {
-    if (!test_checker::s_inited) return true;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return true;
+    }
 
     event_on_rpc_reply event;
     event.init(msg, nullptr);
@@ -156,7 +192,10 @@ static bool inject_on_rpc_reply(task* caller, message_ex* msg)
 
 static bool inject_on_rpc_response_enqueue(rpc_response_task* resp)
 {
-    if (!test_checker::s_inited) return true;
+    if (!test_checker::s_inited.load(std::memory_order_acquire))
+    {
+        return true;
+    }
 
     event_on_rpc_response_enqueue event;
     event.init(resp);
@@ -197,4 +236,3 @@ test_injector::test_injector(const char* name)
 }
 
 }}}
-

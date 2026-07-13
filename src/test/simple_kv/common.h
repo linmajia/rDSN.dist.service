@@ -35,6 +35,7 @@
 
 # pragma once
 
+# include <atomic>
 # include <dsn/tool_api.h>
 # include <dsn/dist/replication.h>
 # include "../../common/replication_common.h"
@@ -43,8 +44,8 @@ namespace dsn { namespace replication { namespace test {
 
 extern std::string g_case_input;
 extern gpid g_default_gpid;
-extern bool g_done;
-extern bool g_fail;
+extern std::atomic<bool> g_done;
+extern std::atomic<bool> g_fail;
 
 const char* partition_status_to_short_string(partition_status::type s);
 partition_status::type partition_status_from_short_string(const std::string& str);
@@ -198,4 +199,3 @@ struct parti_config
 };
 
 }}}
-

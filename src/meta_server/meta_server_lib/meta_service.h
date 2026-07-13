@@ -35,6 +35,7 @@
 
 # pragma once
 
+#include <atomic>
 #include <memory>
 
 #include <dsn/cpp/serverlet.h>
@@ -63,8 +64,16 @@ public:
     const meta_options& get_meta_options() const { return _meta_opts; }
     dist::meta_state_service* get_remote_storage() { return _storage.get(); }
     server_load_balancer* get_balancer() { return _balancer.get(); }
-    int64_t get_control_flags() const { return _meta_ctrl_flags; }
-    bool is_service_freezed() const { return (_meta_ctrl_flags&meta_ctrl_flags::ctrl_meta_freeze) || check_freeze(); }
+    int64_t get_control_flags() const
+    {
+        return _meta_ctrl_flags.load(std::memory_order_relaxed);
+    }
+    bool is_service_freezed() const
+    {
+        return (_meta_ctrl_flags.load(std::memory_order_relaxed) &
+                meta_ctrl_flags::ctrl_meta_freeze) ||
+               check_freeze();
+    }
 
     virtual void reply_message(dsn_message_t, dsn_message_t response) { dsn_rpc_reply(response); }
     virtual void send_message(const rpc_address& target, dsn_message_t request) { dsn_rpc_call_one_way(target.c_addr(), request); }
@@ -132,8 +141,8 @@ private:
     std::set<rpc_address> _dead_set;
 
     int  _node_live_percentage_threshold_for_update;
-    volatile bool _started;
-    volatile int64_t _meta_ctrl_flags;
+    std::atomic<bool> _started;
+    std::atomic<int64_t> _meta_ctrl_flags;
 
     std::string _cluster_root;
 };

@@ -48,7 +48,6 @@ namespace dsn { namespace replication {
 
 meta_server_failure_detector::meta_server_failure_detector(meta_service* svc)
 {
-    _is_primary = false;
     _svc = svc;
 
     const meta_options& opt = _svc->get_meta_options();
@@ -90,7 +89,7 @@ void meta_server_failure_detector::on_worker_connected(rpc_address node)
 rpc_address meta_server_failure_detector::get_primary()
 {
     dsn::utils::auto_lock<zlock> l(_primary_address_lock);
-    if ( _lock_svc!=nullptr && !_is_primary )
+    if (_lock_svc != nullptr && !_is_primary.load(std::memory_order_relaxed))
     {
         uint64_t version;
         error_code ec = _lock_svc->query_cache(_primary_lock_id, _lock_owner_id, version);
@@ -181,18 +180,21 @@ void meta_server_failure_detector::set_primary(rpc_address primary)
     * as only nodes sync from meta_state_service are useful, 
     * but currently, we haven't do sync yet
     */
-    bool old = _is_primary;
+    bool old;
+    bool is_primary;
     {
         utils::auto_lock<zlock> l(_primary_address_lock);
+        old = _is_primary.load(std::memory_order_relaxed);
         _primary_address = primary;
-        _is_primary = (primary == primary_address());
-        if (_is_primary)
+        is_primary = (primary == primary_address());
+        _is_primary.store(is_primary, std::memory_order_relaxed);
+        if (is_primary)
         {
-            _election_moment = dsn_now_ms();
+            _election_moment.store(dsn_now_ms(), std::memory_order_relaxed);
         }
     }
 
-    if (old && !_is_primary)
+    if (old && !is_primary)
     {
         clear_workers();
     }
@@ -228,14 +230,14 @@ meta_server_failure_detector::meta_server_failure_detector(rpc_address leader_ad
 {
     _lock_svc = nullptr;
     _primary_address = leader_address;
-    _is_primary = is_myself_leader;
+    _is_primary.store(is_myself_leader, std::memory_order_relaxed);
 }
 
 void meta_server_failure_detector::set_leader_for_test(rpc_address leader_address, bool is_myself_leader)
 {
     utils::auto_lock<zlock> l(_primary_address_lock);
     _primary_address = leader_address;
-    _is_primary = is_myself_leader;
+    _is_primary.store(is_myself_leader, std::memory_order_relaxed);
 }
 
 }}

@@ -1114,7 +1114,7 @@ void test_case::forward()
         if (_next >= _case_lines.size())
         {
             ddebug("=== on_case_done");
-            g_done = true;
+            g_done.store(true, std::memory_order_release);
             break;
         }
         // pre-view the next one
@@ -1127,7 +1127,7 @@ void test_case::forward()
         else if (cl->name() == exit_case_line::NAME())
         {
             ddebug("=== on_case_exit");
-            g_done = true;
+            g_done.store(true, std::memory_order_release);
             break;
         }
         else
@@ -1151,8 +1151,8 @@ void test_case::fail(const std::string& other)
     output(other);
     print(cl, other);
     derror("=== on_case_failure:line=%d,case=%s", cl->line_no(), cl->to_string().c_str());
-    g_fail = true;
-    g_done = true;
+    g_fail.store(true, std::memory_order_relaxed);
+    g_done.store(true, std::memory_order_release);
     notify_check_client();
 }
 
@@ -1191,7 +1191,10 @@ void test_case::print(case_line* cl, const std::string& other, bool is_skip)
 
 bool test_case::check_skip(bool consume_one)
 {
-    if (g_done) return true;
+    if (g_done.load(std::memory_order_acquire))
+    {
+        return true;
+    }
 
     case_line* c = _case_lines[_next];
     if (c->name() != skip_case_line::NAME())
@@ -1223,7 +1226,10 @@ void test_case::notify_check_client()
 
 bool test_case::check_client_instruction(client_case_line::client_type type)
 {
-    if (g_done) return false;
+    if (g_done.load(std::memory_order_acquire))
+    {
+        return false;
+    }
 
     if (check_skip(false))
         return false;
@@ -1273,7 +1279,10 @@ bool test_case::check_client_read(int& id, std::string& key, int& timeout_ms)
 
 void test_case::on_end_write(int id, ::dsn::error_code err, int32_t resp)
 {
-    if (g_done) return;
+    if (g_done.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     char buf[1024];
     snprintf_p(buf, 1024, "%s:end_write:id=%d,err=%s,resp=%d",
@@ -1313,7 +1322,10 @@ void test_case::on_end_write(int id, ::dsn::error_code err, int32_t resp)
 
 void test_case::on_end_read(int id, ::dsn::error_code err, const std::string& resp)
 {
-    if (g_done) return;
+    if (g_done.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     char buf[1024];
     snprintf_p(buf, 1024, "%s:end_read:id=%d,err=%s,resp=%s",
@@ -1353,7 +1365,10 @@ void test_case::on_end_read(int id, ::dsn::error_code err, const std::string& re
 
 bool test_case::on_event(const event* ev)
 {
-    if (g_done) return true;
+    if (g_done.load(std::memory_order_acquire))
+    {
+        return true;
+    }
 
     ddebug("=== %s", ev->to_string().c_str());
 
@@ -1392,7 +1407,10 @@ bool test_case::on_event(const event* ev)
 
 void test_case::on_check()
 {
-    if (g_done) return;
+    if (g_done.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     ++_null_loop_count;
     if (s_null_loop > 0 && _null_loop_count > s_null_loop)
@@ -1403,7 +1421,10 @@ void test_case::on_check()
 
 void test_case::on_config_change(const parti_config& last, const parti_config& cur)
 {
-    if (g_done) return;
+    if (g_done.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     _null_loop_count = 0; // reset null loop count
 
@@ -1444,7 +1465,10 @@ void test_case::on_config_change(const parti_config& last, const parti_config& c
 
 void test_case::on_state_change(const state_snapshot& last, const state_snapshot& cur)
 {
-    if (g_done) return;
+    if (g_done.load(std::memory_order_acquire))
+    {
+        return;
+    }
 
     _null_loop_count = 0; // reset null loop count
 

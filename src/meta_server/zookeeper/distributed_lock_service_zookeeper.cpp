@@ -35,6 +35,7 @@
 #include <zookeeper.h>
 #include <functional>
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include "zookeeper_session.h"
@@ -107,13 +108,21 @@ error_code distributed_lock_service_zookeeper::initialize(const std::vector<std:
     }
 
     _session = zookeeper_session_mgr::instance().get_session(&node);
-    _zoo_state = _session->attach(this, std::bind(&distributed_lock_service_zookeeper::on_zoo_session_evt,
-                                                  lock_srv_ptr(this),
-                                                  std::placeholders::_1) );
-    if (_zoo_state != ZOO_CONNECTED_STATE)
+    const int uninitialized_zoo_state = std::numeric_limits<int>::min();
+    _zoo_state.store(uninitialized_zoo_state, std::memory_order_relaxed);
+    int attached_zoo_state =
+        _session->attach(this,
+                         std::bind(&distributed_lock_service_zookeeper::on_zoo_session_evt,
+                                   lock_srv_ptr(this),
+                                   std::placeholders::_1));
+    int expected_zoo_state = uninitialized_zoo_state;
+    _zoo_state.compare_exchange_strong(expected_zoo_state,
+                                       attached_zoo_state,
+                                       std::memory_order_relaxed);
+    if (_zoo_state.load(std::memory_order_relaxed) != ZOO_CONNECTED_STATE)
     {
         _waiting_attach.wait_for( zookeeper_session_mgr::fast_instance().timeout() );
-        if (_zoo_state != ZOO_CONNECTED_STATE)
+        if (_zoo_state.load(std::memory_order_relaxed) != ZOO_CONNECTED_STATE)
         {
             dwarn("attach to zookeeper session timeout, distributed lock service initialized failed");
             return ERR_TIMEOUT;
@@ -283,7 +292,7 @@ void distributed_lock_service_zookeeper::dispatch_zookeeper_session_expire()
 void distributed_lock_service_zookeeper::on_zoo_session_evt(lock_srv_ptr _this, int zoo_state)
 {
     //TODO: better policy of zookeeper session response
-    _this->_zoo_state = zoo_state;
+    _this->_zoo_state.store(zoo_state, std::memory_order_relaxed);
 
     if (_this->_first_call && ZOO_CONNECTED_STATE==zoo_state)
     {

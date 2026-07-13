@@ -49,8 +49,8 @@ namespace dsn { namespace replication { namespace test {
 
 std::string g_case_input("case-000.act");
 gpid g_default_gpid(1, 0);
-bool g_done = false;
-bool g_fail = false;
+std::atomic<bool> g_done{false};
+std::atomic<bool> g_fail{false};
 
 const char* partition_status_to_short_string(partition_status::type s)
 {
@@ -89,14 +89,14 @@ partition_status::type partition_status_from_short_string(const std::string& str
 std::string address_to_node(rpc_address addr)
 {
     if (addr.is_invalid()) return "-";
-    dassert(test_checker::s_inited, "");
+    dassert(test_checker::s_app_info_ready.load(std::memory_order_acquire), "");
     return test_checker::fast_instance().address_to_node_name(addr);
 }
 
 rpc_address node_to_address(const std::string& name)
 {
     if (name == "-") return rpc_address();
-    dassert(test_checker::s_inited, "");
+    dassert(test_checker::s_app_info_ready.load(std::memory_order_acquire), "");
     return test_checker::fast_instance().node_name_to_address(name);
 }
 
@@ -350,4 +350,3 @@ void parti_config::convert_from(const partition_configuration& c)
 }
 
 }}}
-

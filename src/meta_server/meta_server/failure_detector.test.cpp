@@ -3,6 +3,8 @@
 #include <dsn/dist/failure_detector_multimaster.h>
 #include <gtest/gtest.h>
 #include <dsn/service_api_cpp.h>
+#include <atomic>
+#include <mutex>
 #include <vector>
 #include <cstring>
 #include <tuple>
@@ -23,11 +25,12 @@ using namespace dsn::fd;
 
 DEFINE_TASK_CODE_RPC(RPC_MASTER_CONFIG, TASK_PRIORITY_COMMON, THREAD_POOL_FD)
 
-volatile int started_apps = 0;
+std::atomic<int> started_apps{0};
 class worker_fd_test: public ::dsn::dist::slave_failure_detector_with_multimaster
 {
 private:
-    volatile bool _send_ping_switch;
+    std::atomic<bool> _send_ping_switch{false};
+    std::mutex _callback_lock;
     /* this function only triggerd once*/
     std::function<void (rpc_address addr)> _connected_cb;
     std::function<void (const std::vector<rpc_address>&)> _disconnected_cb;
@@ -35,7 +38,7 @@ private:
 protected:
     virtual void send_beacon(::dsn::rpc_address node, uint64_t time) override
     {
-        if (_send_ping_switch)
+        if (_send_ping_switch.load(std::memory_order_relaxed))
             failure_detector::send_beacon(node, time);
         else
         {
@@ -46,12 +49,14 @@ protected:
 
     virtual void on_master_disconnected(const std::vector<rpc_address> &nodes) override
     {
-        if ( _disconnected_cb )
+        std::lock_guard<std::mutex> l(_callback_lock);
+        if (_disconnected_cb)
             _disconnected_cb(nodes);
     }
 
     virtual void on_master_connected(rpc_address node) override
     {
+        std::lock_guard<std::mutex> l(_callback_lock);
         if (_connected_cb)
             _connected_cb(node);
     }
@@ -64,22 +69,24 @@ public:
             [=]() {/*stub->on_meta_server_connected();*/ }
             )
     {
-        _send_ping_switch = false;
     }
     void toggle_send_ping(bool toggle)
     {
-        _send_ping_switch = toggle;
+        _send_ping_switch.store(toggle, std::memory_order_relaxed);
     }
     void when_connected(const std::function<void (rpc_address addr)>& func)
     {
+        std::lock_guard<std::mutex> l(_callback_lock);
         _connected_cb = func;
     }
     void when_disconnected(const std::function<void (const std::vector<rpc_address>& nodes)>& func)
     {
+        std::lock_guard<std::mutex> l(_callback_lock);
         _disconnected_cb = func;
     }
     void clear()
     {
+        std::lock_guard<std::mutex> l(_callback_lock);
         _connected_cb = {};
         _disconnected_cb = {};
     }
@@ -88,14 +95,15 @@ public:
 class master_fd_test: public replication::meta_server_failure_detector
 {
 private:
+    std::mutex _callback_lock;
     std::function<void (rpc_address addr)> _connected_cb;
     std::function<void (const std::vector<rpc_address>&)> _disconnected_cb;
-    volatile bool _response_ping_switch;
+    std::atomic<bool> _response_ping_switch{true};
 
 protected:
     virtual void on_ping(const beacon_msg &beacon, ::dsn::rpc_replier<beacon_ack> &reply) override
     {
-        if (_response_ping_switch)
+        if (_response_ping_switch.load(std::memory_order_relaxed))
             meta_server_failure_detector::on_ping(beacon, reply);
         else {
             dinfo("ignore on ping, beacon msg, time[%" PRId64 "], from[%s], to[%s]",
@@ -107,29 +115,32 @@ protected:
 
     virtual void on_worker_disconnected(const std::vector<rpc_address>& worker_list) override
     {
+        std::lock_guard<std::mutex> l(_callback_lock);
         if (_disconnected_cb)
             _disconnected_cb(worker_list);
     }
     virtual void on_worker_connected(rpc_address node) override
     {
+        std::lock_guard<std::mutex> l(_callback_lock);
         if (_connected_cb)
             _connected_cb(node);
     }
 public:
     master_fd_test(): meta_server_failure_detector(rpc_address(), false)
     {
-        _response_ping_switch = true;
     }
     void toggle_response_ping(bool toggle)
     {
-        _response_ping_switch = toggle;
+        _response_ping_switch.store(toggle, std::memory_order_relaxed);
     }
     void when_connected(const std::function<void (rpc_address addr)>& func)
     {
+        std::lock_guard<std::mutex> l(_callback_lock);
         _connected_cb = func;
     }
     void when_disconnected(const std::function<void (const std::vector<rpc_address>& nodes)>& func)
     {
+        std::lock_guard<std::mutex> l(_callback_lock);
         _disconnected_cb = func;
     }
     void test_register_worker(rpc_address node)
@@ -139,6 +150,7 @@ public:
     }
     void clear()
     {
+        std::lock_guard<std::mutex> l(_callback_lock);
         _connected_cb = {};
         _disconnected_cb = {};
     }
@@ -156,9 +168,9 @@ public:
             master_group.push_back( rpc_address("localhost", MPORT_START+i) );
         _worker_fd = new worker_fd_test(master_group);
         _worker_fd->start(1, 1, 4, 5);
-        ++started_apps;
 
         register_rpc_handler(RPC_MASTER_CONFIG, "RPC_MASTER_CONFIG", &test_worker::on_master_config);
+        started_apps.fetch_add(1, std::memory_order_acq_rel);
         return ERR_OK;
     }
 
@@ -191,7 +203,7 @@ public:
     {
         _master_fd = new master_fd_test();
         _master_fd->start(1, 1, 4, 5);
-        ++started_apps;
+        started_apps.fetch_add(1, std::memory_order_acq_rel);
 
         return ERR_OK;
     }
@@ -225,8 +237,8 @@ void fd_test_init()
 
 bool get_worker_and_master(test_worker* &worker, std::vector<test_master*> &masters)
 {
-    started_apps = 0;
-    bool ans = spin_wait_condition( [](){ return started_apps = MCOUNT+1; }, 30);
+    bool ans = spin_wait_condition(
+        []() { return started_apps.load(std::memory_order_acquire) == MCOUNT + 1; }, 30);
     if (!ans)
         return false;
 
