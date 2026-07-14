@@ -56,6 +56,7 @@ meta_service::meta_service():
     serverlet("meta_service"),
     _failure_detector(nullptr),
     _started(false),
+    _stopped(false),
     _meta_ctrl_flags(0)
 {
     _node_live_percentage_threshold_for_update = 65;
@@ -66,6 +67,41 @@ meta_service::meta_service():
 
 meta_service::~meta_service()
 {
+    stop();
+}
+
+error_code meta_service::stop()
+{
+    if (_stopped.exchange(true, std::memory_order_acq_rel))
+    {
+        return ERR_OK;
+    }
+
+    {
+        zauto_write_lock l(_meta_lock);
+        _started.store(false, std::memory_order_release);
+    }
+
+    if (_failure_detector != nullptr)
+    {
+        _failure_detector->stop();
+        _failure_detector.reset();
+    }
+
+    if (_balancer_timer_task != nullptr)
+    {
+        _balancer_timer_task->cancel(true);
+        _balancer_timer_task = nullptr;
+    }
+
+    dsn_task_tracker_wait_all(tracker());
+
+    if (_storage != nullptr)
+    {
+        return _storage->finalize();
+    }
+
+    return ERR_OK;
 }
 
 error_code meta_service::remote_storage_initialize()
@@ -127,7 +163,7 @@ void meta_service::set_node_state(const std::vector<rpc_address> &nodes, bool is
     for (const rpc_address& address: nodes) {
         tasking::enqueue(
             LPC_META_STATE_HIGH,
-            nullptr,
+            this,
             std::bind(&server_state::on_change_node_state, _state.get(), address, is_alive),
             server_state::s_state_write_hash
         );
@@ -174,15 +210,15 @@ void meta_service::service_starting()
     for (auto& node_pair: nodes) {
         tasking::enqueue(
             LPC_META_STATE_HIGH,
-            nullptr,
+            this,
             std::bind(&server_state::on_change_node_state, _state.get(), node_pair.first, node_pair.second),
             server_state::s_state_write_hash
         );
     }
 
-    tasking::enqueue_timer(
+    _balancer_timer_task = tasking::enqueue_timer(
         LPC_META_STATE_NORMAL,
-        nullptr,
+        this,
         std::bind(&meta_service::balancer_run, this),
         std::chrono::milliseconds(_opts.lb_interval_ms),
         server_state::s_state_write_hash,

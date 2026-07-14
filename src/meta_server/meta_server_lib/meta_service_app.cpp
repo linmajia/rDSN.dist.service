@@ -110,8 +110,9 @@ namespace dsn {
 
         error_code meta_service_app::stop(bool /*cleanup*/)
         {
+            error_code err = _service->stop();
             _service.reset(nullptr);
-            return ERR_OK;
+            return err;
         }
     }
 }

@@ -59,6 +59,7 @@ public:
     virtual ~meta_service();
 
     error_code start();
+    error_code stop();
 
     const replication_options& get_options() const { return _opts; }
     const meta_options& get_meta_options() const { return _meta_opts; }
@@ -142,7 +143,9 @@ private:
 
     int  _node_live_percentage_threshold_for_update;
     std::atomic<bool> _started;
+    std::atomic<bool> _stopped;
     std::atomic<int64_t> _meta_ctrl_flags;
+    task_ptr _balancer_timer_task;
 
     std::string _cluster_root;
 };
