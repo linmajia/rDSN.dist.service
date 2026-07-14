@@ -65,6 +65,7 @@ public:
     const meta_options& get_meta_options() const { return _meta_opts; }
     dist::meta_state_service* get_remote_storage() { return _storage.get(); }
     server_load_balancer* get_balancer() { return _balancer.get(); }
+    bool is_stopped() const { return _stopped.load(std::memory_order_acquire); }
     int64_t get_control_flags() const
     {
         return _meta_ctrl_flags.load(std::memory_order_relaxed);
@@ -89,6 +90,7 @@ public:
 
 private:
     void register_rpc_handlers();
+    void unregister_rpc_handlers();
 
     // client => meta server
     // query partition configuration
@@ -137,6 +139,7 @@ private:
     std::shared_ptr<dist::meta_state_service> _storage;
     std::shared_ptr<server_load_balancer> _balancer;
 
+    mutable zrwlock_nr _lifecycle_lock;
     mutable zrwlock_nr _meta_lock;
     std::set<rpc_address> _alive_set;
     std::set<rpc_address> _dead_set;

@@ -114,6 +114,7 @@ private:
 
     task_ptr update_configuration_on_remote(std::shared_ptr<configuration_update_request>& config_request);
     void on_update_configuration_on_remote_reply(error_code ec, std::shared_ptr<configuration_update_request>& request);
+    void abort_configuration_sync(config_context& context, const partition_configuration& config);
     void update_configuration_locally(app_state& app, std::shared_ptr<configuration_update_request>& config_request);
     void apply_migration_actions(migration_list& ml);
     bool request_check(const partition_configuration& old, const configuration_update_request& request);

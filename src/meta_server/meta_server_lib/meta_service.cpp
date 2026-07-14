@@ -72,36 +72,54 @@ meta_service::~meta_service()
 
 error_code meta_service::stop()
 {
-    if (_stopped.exchange(true, std::memory_order_acq_rel))
+    task_ptr balancer_timer_task;
     {
-        return ERR_OK;
-    }
+        zauto_write_lock l(_lifecycle_lock);
+        if (_stopped.exchange(true, std::memory_order_acq_rel))
+        {
+            return ERR_OK;
+        }
 
-    {
-        zauto_write_lock l(_meta_lock);
+        zauto_write_lock meta_l(_meta_lock);
         _started.store(false, std::memory_order_release);
+        balancer_timer_task = _balancer_timer_task;
+        _balancer_timer_task = nullptr;
     }
 
+    unregister_rpc_handlers();
+
+    error_code result = ERR_OK;
     if (_failure_detector != nullptr)
     {
-        _failure_detector->stop();
+        error_code err = _failure_detector->stop();
+        if (result == ERR_OK && err != ERR_OK)
+        {
+            result = err;
+        }
         _failure_detector.reset();
     }
 
-    if (_balancer_timer_task != nullptr)
+    // Wait for handlers that entered between publishing _stopped=true and
+    // unregistering the RPC endpoints before tearing down their dependencies.
+    zauto_write_lock l(_lifecycle_lock);
+
+    if (balancer_timer_task != nullptr)
     {
-        _balancer_timer_task->cancel(true);
-        _balancer_timer_task = nullptr;
+        balancer_timer_task->cancel(true);
     }
 
     dsn_task_tracker_wait_all(tracker());
 
     if (_storage != nullptr)
     {
-        return _storage->finalize();
+        error_code err = _storage->finalize();
+        if (result == ERR_OK && err != ERR_OK)
+        {
+            result = err;
+        }
     }
 
-    return ERR_OK;
+    return result;
 }
 
 error_code meta_service::remote_storage_initialize()
@@ -181,11 +199,22 @@ void meta_service::get_node_state(std::set<rpc_address> &node_set, bool is_alive
 
 void meta_service::balancer_run()
 {
+    if (_stopped.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
     _state->check_all_partitions();
 }
 
 void meta_service::prepare_service_starting()
 {
+    zauto_read_lock lifecycle_l(_lifecycle_lock);
+    if (_stopped.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
     zauto_write_lock l(_meta_lock);
     const meta_view view = _state->get_meta_view();
     for (auto& kv : *view.nodes)
@@ -197,7 +226,13 @@ void meta_service::prepare_service_starting()
 
 void meta_service::service_starting()
 {
-    zauto_read_lock l(_meta_lock);
+    zauto_read_lock lifecycle_l(_lifecycle_lock);
+    if (_stopped.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    zauto_write_lock l(_meta_lock);
 
     _started.store(true, std::memory_order_release);
     std::list< std::pair<rpc_address, bool> > nodes;
@@ -345,6 +380,21 @@ void meta_service::register_rpc_handlers()
         );
 }
 
+void meta_service::unregister_rpc_handlers()
+{
+    unregister_rpc_handler(RPC_CM_CONTROL_META);
+    unregister_rpc_handler(RPC_CM_PROPOSE_BALANCER);
+    unregister_rpc_handler(RPC_CM_CLUSTER_INFO);
+    unregister_rpc_handler(RPC_CM_LIST_NODES);
+    unregister_rpc_handler(RPC_CM_LIST_APPS);
+    unregister_rpc_handler(RPC_CM_DROP_APP);
+    unregister_rpc_handler(RPC_CM_CREATE_APP);
+    unregister_rpc_handler(RPC_CM_UPDATE_PARTITION_CONFIGURATION);
+    unregister_rpc_handler(RPC_CM_QUERY_PARTITION_CONFIG_BY_INDEX);
+    unregister_rpc_handler(RPC_CM_CONFIG_SYNC);
+    unregister_rpc_handler(RPC_CM_QUERY_NODE_PARTITIONS);
+}
+
 int meta_service::check_primary(dsn_message_t req)
 {
     if (!_failure_detector->is_primary())
@@ -372,7 +422,13 @@ int meta_service::check_primary(dsn_message_t req)
 }
 
 #define RPC_CHECK_STATUS(dsn_msg, response_struct)\
+    zauto_read_lock lifecycle_l(_lifecycle_lock);\
     dinfo("rpc %s called", __FUNCTION__);\
+    if (_stopped.load(std::memory_order_acquire)) {\
+        response_struct.err = ERR_SERVICE_NOT_ACTIVE;\
+        reply(dsn_msg, response_struct);\
+        return;\
+    }\
     int result = check_primary(dsn_msg);\
     if (result == 0) return;\
     if (result == -1 || !_started.load(std::memory_order_acquire)) {\
@@ -388,7 +444,7 @@ void meta_service::on_create_app(dsn_message_t req)
     RPC_CHECK_STATUS(req, response);
 
     dsn_msg_add_ref(req);
-    tasking::enqueue(LPC_META_STATE_NORMAL, nullptr, std::bind(&server_state::create_app, _state.get(), req), server_state::s_state_write_hash);
+    tasking::enqueue(LPC_META_STATE_NORMAL, this, std::bind(&server_state::create_app, _state.get(), req), server_state::s_state_write_hash);
 }
 
 void meta_service::on_drop_app(dsn_message_t req)
@@ -397,7 +453,7 @@ void meta_service::on_drop_app(dsn_message_t req)
     RPC_CHECK_STATUS(req, response);
 
     dsn_msg_add_ref(req);
-    tasking::enqueue(LPC_META_STATE_NORMAL, nullptr, std::bind(&server_state::drop_app, _state.get(), req), server_state::s_state_write_hash);
+    tasking::enqueue(LPC_META_STATE_NORMAL, this, std::bind(&server_state::drop_app, _state.get(), req), server_state::s_state_write_hash);
 }
 
 void meta_service::on_list_apps(dsn_message_t req)
@@ -546,7 +602,7 @@ void meta_service::on_config_sync(dsn_message_t req)
         zauto_read_lock l(_meta_lock);
         dsn_msg_add_ref(req);
         tasking::enqueue(LPC_META_STATE_HIGH,
-            nullptr,
+            this,
             std::bind(&server_state::on_config_sync, _state.get(), req),
             server_state::s_state_write_hash);
     }
@@ -577,7 +633,7 @@ void meta_service::on_update_configuration(dsn_message_t req)
 
     dsn_msg_add_ref(req);
     tasking::enqueue(LPC_META_STATE_HIGH,
-        nullptr,
+        this,
         std::bind(&server_state::on_update_configuration, _state.get(), request, req),
         server_state::s_state_write_hash
     );
@@ -621,7 +677,7 @@ void meta_service::on_control_meta(dsn_message_t req)
     }
     if (request.ctrl_flags&meta_ctrl_flags::ctrl_disable_replica_migration) {
         tasking::enqueue(LPC_META_STATE_NORMAL,
-            nullptr,
+            this,
             std::bind(&server_state::clear_proposals, _state.get()),
             server_state::s_state_write_hash
         );

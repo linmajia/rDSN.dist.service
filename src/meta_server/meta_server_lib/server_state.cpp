@@ -122,6 +122,22 @@ static inline void reply_message(meta_service* svc, dsn_message_t request_msg, T
     svc->reply_message(request_msg, response_msg);
 }
 
+template<typename TResponse>
+static inline bool reply_service_not_active_if_stopped(meta_service* svc,
+                                                       dsn_message_t request_msg)
+{
+    if (!svc->is_stopped())
+    {
+        return false;
+    }
+
+    TResponse response;
+    response.err = ERR_SERVICE_NOT_ACTIVE;
+    reply_message(svc, request_msg, response);
+    dsn_msg_release_ref(request_msg);
+    return true;
+}
+
 server_state::server_state():
     _meta_svc(nullptr), _creating_apps_count(0), _dropping_apps_count(0),
     _cli_json_state_handle(nullptr), _cli_dump_handle(nullptr)
@@ -780,6 +796,12 @@ void server_state::query_configuration_by_node(const configuration_query_by_node
 // this is done in meta_state_thread_pool
 void server_state::on_config_sync(dsn_message_t msg)
 {
+    if (reply_service_not_active_if_stopped<configuration_query_by_node_response>(
+            _meta_svc, msg))
+    {
+        return;
+    }
+
     configuration_query_by_node_request request;
     configuration_query_by_node_response response;
 
@@ -881,8 +903,18 @@ void server_state::query_configuration_by_index(const configuration_query_by_ind
 
 void server_state::init_app_partition_node(std::shared_ptr<app_state>& app, int pidx)
 {
+    if (_meta_svc->is_stopped())
+    {
+        return;
+    }
+
     auto on_create_app_partition = [this, pidx, app](error_code ec) mutable
     {
+        if (_meta_svc->is_stopped())
+        {
+            return;
+        }
+
         dinfo("create partition node: gpid(%d.%d), result: %s", app->app_id, pidx, ec.to_string());
         if (ERR_OK==ec || ERR_NODE_ALREADY_EXIST==ec)
         {
@@ -903,7 +935,7 @@ void server_state::init_app_partition_node(std::shared_ptr<app_state>& app, int 
             dwarn("create partition node failed, gpid(%d.%d), err(%s), retry later", app->app_id, pidx, ec.to_string());
             //TODO: add parameter of the retry time interval in config file
             tasking::enqueue(LPC_META_STATE_HIGH,
-                             nullptr,
+                             _meta_svc,
                              std::bind(&server_state::init_app_partition_node, this, app, pidx),
                              0,
                              std::chrono::milliseconds(1000));
@@ -915,14 +947,27 @@ void server_state::init_app_partition_node(std::shared_ptr<app_state>& app, int 
     _meta_svc->get_remote_storage()->create_node(app_partition_path,
         LPC_META_STATE_HIGH,
         on_create_app_partition,
-        value
+        value,
+        _meta_svc
     );
 }
 
 void server_state::do_app_create(std::shared_ptr<app_state>& app, dsn_message_t msg)
 {
+    if (reply_service_not_active_if_stopped<configuration_create_app_response>(
+            _meta_svc, msg))
+    {
+        return;
+    }
+
     auto on_create_app_root = [this, msg, app](error_code ec) mutable
     {
+        if (reply_service_not_active_if_stopped<configuration_create_app_response>(
+                _meta_svc, msg))
+        {
+            return;
+        }
+
         configuration_create_app_response resp;
         if (ERR_OK==ec || ERR_NODE_ALREADY_EXIST==ec)
         {
@@ -950,7 +995,7 @@ void server_state::do_app_create(std::shared_ptr<app_state>& app, dsn_message_t 
             // aborting the whole meta server; the create is idempotent
             // (ERR_NODE_ALREADY_EXIST is treated as success).
             dwarn("create app on storage service failed, name: %s, err(%s), continue to create later", app->app_name.c_str(), ec.to_string());
-            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_create, this, app, msg),
+            tasking::enqueue(LPC_META_STATE_HIGH, _meta_svc, std::bind(&server_state::do_app_create, this, app, msg),
                              0, std::chrono::seconds(1));
         }
     };
@@ -961,12 +1006,19 @@ void server_state::do_app_create(std::shared_ptr<app_state>& app, dsn_message_t 
         app_dir,
         LPC_META_STATE_HIGH,
         on_create_app_root,
-        value
+        value,
+        _meta_svc
     );
 }
 
 void server_state::create_app(dsn_message_t msg)
 {
+    if (reply_service_not_active_if_stopped<configuration_create_app_response>(
+            _meta_svc, msg))
+    {
+        return;
+    }
+
     configuration_create_app_request request;
     configuration_create_app_response response;
     std::shared_ptr<app_state> app;
@@ -1073,9 +1125,21 @@ void server_state::create_app(dsn_message_t msg)
 
 void server_state::do_app_drop(std::shared_ptr<app_state>& app, dsn_message_t msg)
 {
+    if (reply_service_not_active_if_stopped<configuration_drop_app_response>(
+            _meta_svc, msg))
+    {
+        return;
+    }
+
     blob value = app->encode_json_with_status(app_status::AS_DROPPED);
     std::string app_path = get_app_path(*app);
     auto after_set_app_dropped = [this, app, msg](error_code ec) {
+        if (reply_service_not_active_if_stopped<configuration_drop_app_response>(
+                _meta_svc, msg))
+        {
+            return;
+        }
+
         if (ERR_OK == ec || ERR_OBJECT_NOT_FOUND == ec)
         {
             configuration_drop_app_response response;
@@ -1116,18 +1180,25 @@ void server_state::do_app_drop(std::shared_ptr<app_state>& app, dsn_message_t ms
             // pressure): retry the idempotent set-data instead of aborting the
             // whole meta server.
             dwarn("drop table(id:%d, name:%s) failed, err(%s), continue to drop later", app->app_id, app->app_name.c_str(), ec.to_string());
-            tasking::enqueue(LPC_META_STATE_HIGH, nullptr, std::bind(&server_state::do_app_drop, this, app, msg),
+            tasking::enqueue(LPC_META_STATE_HIGH, _meta_svc, std::bind(&server_state::do_app_drop, this, app, msg),
                              0, std::chrono::seconds(1));
         }
     };
     _meta_svc->get_remote_storage()->set_data(app_path,
         value,
         LPC_META_STATE_HIGH,
-        after_set_app_dropped);
+        after_set_app_dropped,
+        _meta_svc);
 }
 
 void server_state::drop_app(dsn_message_t msg)
 {
+    if (reply_service_not_active_if_stopped<configuration_drop_app_response>(
+            _meta_svc, msg))
+    {
+        return;
+    }
+
     configuration_drop_app_request request;
     configuration_drop_app_response response;
 
@@ -1337,8 +1408,26 @@ task_ptr server_state::update_configuration_on_remote(std::shared_ptr<configurat
         std::bind(&server_state::on_update_configuration_on_remote_reply,
             this,
             std::placeholders::_1,
-            config_request)
+            config_request),
+        _meta_svc
     );
+}
+
+void server_state::abort_configuration_sync(config_context& context,
+                                             const partition_configuration& config)
+{
+    context.pending_sync_task = nullptr;
+    context.pending_sync_request.reset();
+    context.stage = config_status::not_pending;
+    if (context.msg)
+    {
+        configuration_update_response response;
+        response.err = ERR_SERVICE_NOT_ACTIVE;
+        response.config = config;
+        reply_message(_meta_svc, context.msg, response);
+        dsn_msg_release_ref(context.msg);
+        context.msg = nullptr;
+    }
 }
 
 void server_state::on_update_configuration_on_remote_reply(error_code ec, std::shared_ptr<configuration_update_request>& config_request)
@@ -1347,13 +1436,24 @@ void server_state::on_update_configuration_on_remote_reply(error_code ec, std::s
     dsn::gpid& gpid = config_request->config.pid;
     std::shared_ptr<app_state> app = get_app(gpid.get_app_id());
     config_context& cc = app->helpers->contexts[gpid.get_partition_index()];
+    if (_meta_svc->is_stopped())
+    {
+        abort_configuration_sync(cc, config_request->config);
+        return;
+    }
 
     //if multiple threads exist in the thread pool, the check may be failed
     dassert(app->status==app_status::AS_AVAILABLE || app->status==app_status::AS_DROPPING, "if app removed, this task should be cancelled");
     if (ec == ERR_TIMEOUT)
     {
-        cc.pending_sync_task = tasking::enqueue(LPC_META_STATE_HIGH, nullptr, [this, config_request, &cc] () mutable
+        cc.pending_sync_task = tasking::enqueue(LPC_META_STATE_HIGH, _meta_svc, [this, config_request, &cc] () mutable
         {
+            if (_meta_svc->is_stopped())
+            {
+                zauto_write_lock l(_lock);
+                abort_configuration_sync(cc, config_request->config);
+                return;
+            }
             cc.pending_sync_task = update_configuration_on_remote(config_request);
         },
         0, std::chrono::seconds(1));
@@ -1400,8 +1500,14 @@ void server_state::on_update_configuration_on_remote_reply(error_code ec, std::s
         // set_data, the same way ERR_TIMEOUT is handled above.
         dwarn("update configuration on remote storage failed, gpid(%d.%d), err(%s), retry later",
               gpid.get_app_id(), gpid.get_partition_index(), ec.to_string());
-        cc.pending_sync_task = tasking::enqueue(LPC_META_STATE_HIGH, nullptr, [this, config_request, &cc] () mutable
+        cc.pending_sync_task = tasking::enqueue(LPC_META_STATE_HIGH, _meta_svc, [this, config_request, &cc] () mutable
         {
+            if (_meta_svc->is_stopped())
+            {
+                zauto_write_lock l(_lock);
+                abort_configuration_sync(cc, config_request->config);
+                return;
+            }
             cc.pending_sync_task = update_configuration_on_remote(config_request);
         },
         0, std::chrono::seconds(1));
@@ -1504,6 +1610,12 @@ void server_state::downgrade_stateless_nodes(std::shared_ptr<app_state>& app, in
 
 void server_state::on_update_configuration(std::shared_ptr<configuration_update_request>& cfg_request, dsn_message_t msg)
 {
+    if (reply_service_not_active_if_stopped<configuration_update_response>(
+            _meta_svc, msg))
+    {
+        return;
+    }
+
     zauto_write_lock l(_lock);
     dsn::gpid& gpid = cfg_request->config.pid;
     std::shared_ptr<app_state> app = get_app(gpid.get_app_id());
@@ -1658,6 +1770,11 @@ void server_state::on_partition_node_dead(std::shared_ptr<app_state>& app, int p
 
 void server_state::on_change_node_state(rpc_address node, bool is_alive)
 {
+    if (_meta_svc->is_stopped())
+    {
+        return;
+    }
+
     dinfo("change node(%s) state to %s", node.to_string(), is_alive?"alive":"dead");
     zauto_write_lock l(_lock);
     if (!is_alive)
@@ -1719,6 +1836,11 @@ void server_state::on_propose_balancer(const configuration_balancer_request& req
 
 void server_state::clear_proposals()
 {
+    if (_meta_svc->is_stopped())
+    {
+        return;
+    }
+
     ddebug("clear all exist proposals");
     zauto_write_lock l(_lock);
     for (auto& kv: _exist_apps)
