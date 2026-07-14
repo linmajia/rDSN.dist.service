@@ -404,17 +404,17 @@ void meta_service::register_rpc_handlers()
 
 void meta_service::unregister_rpc_handlers()
 {
-    unregister_rpc_handler_and_wait(RPC_CM_CONTROL_META);
-    unregister_rpc_handler_and_wait(RPC_CM_PROPOSE_BALANCER);
-    unregister_rpc_handler_and_wait(RPC_CM_CLUSTER_INFO);
-    unregister_rpc_handler_and_wait(RPC_CM_LIST_NODES);
-    unregister_rpc_handler_and_wait(RPC_CM_LIST_APPS);
-    unregister_rpc_handler_and_wait(RPC_CM_DROP_APP);
-    unregister_rpc_handler_and_wait(RPC_CM_CREATE_APP);
-    unregister_rpc_handler_and_wait(RPC_CM_UPDATE_PARTITION_CONFIGURATION);
-    unregister_rpc_handler_and_wait(RPC_CM_QUERY_PARTITION_CONFIG_BY_INDEX);
-    unregister_rpc_handler_and_wait(RPC_CM_CONFIG_SYNC);
-    unregister_rpc_handler_and_wait(RPC_CM_QUERY_NODE_PARTITIONS);
+    unregister_rpc_handler(RPC_CM_CONTROL_META);
+    unregister_rpc_handler(RPC_CM_PROPOSE_BALANCER);
+    unregister_rpc_handler(RPC_CM_CLUSTER_INFO);
+    unregister_rpc_handler(RPC_CM_LIST_NODES);
+    unregister_rpc_handler(RPC_CM_LIST_APPS);
+    unregister_rpc_handler(RPC_CM_DROP_APP);
+    unregister_rpc_handler(RPC_CM_CREATE_APP);
+    unregister_rpc_handler(RPC_CM_UPDATE_PARTITION_CONFIGURATION);
+    unregister_rpc_handler(RPC_CM_QUERY_PARTITION_CONFIG_BY_INDEX);
+    unregister_rpc_handler(RPC_CM_CONFIG_SYNC);
+    unregister_rpc_handler(RPC_CM_QUERY_NODE_PARTITIONS);
 }
 
 int meta_service::check_primary(dsn_message_t req)
@@ -444,6 +444,7 @@ int meta_service::check_primary(dsn_message_t req)
 }
 
 #define RPC_CHECK_STATUS(dsn_msg, response_struct)\
+    zauto_read_lock lifecycle_l(_lifecycle_lock);\
     dinfo("rpc %s called", __FUNCTION__);\
     if (_stopped.load(std::memory_order_acquire)) {\
         response_struct.err = ERR_SERVICE_NOT_ACTIVE;\
