@@ -50,6 +50,7 @@ namespace dsn
             // no parameter need
             virtual error_code initialize(const std::vector<std::string>& args) override;
             virtual error_code finalize() override { return ERR_OK; }
+            virtual bool finalize_releases_owner_reference() const override { return false; }
 
             virtual std::pair<task_ptr, task_ptr> lock(
                 const std::string& lock_id,

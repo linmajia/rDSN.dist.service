@@ -50,6 +50,7 @@ public:
     // lock_root = argv[0]
     virtual error_code initialize(const std::vector<std::string>& args) override;
     virtual error_code finalize() override;
+    virtual bool finalize_releases_owner_reference() const override { return true; }
 
     virtual std::pair<task_ptr, task_ptr> lock(
         const std::string& lock_id,

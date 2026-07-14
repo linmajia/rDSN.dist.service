@@ -33,7 +33,6 @@
  *     xxxx-xx-xx, author, fix bug about xxx
  */
 
-#include <dsn/utility/autoref_ptr.h>
 #include <dsn/utility/factory_store.h>
 #include "meta_server_failure_detector.h"
 #include "server_state.h"
@@ -74,11 +73,10 @@ meta_server_failure_detector::~meta_server_failure_detector()
     {
         dist::distributed_lock_service* lock_svc = _lock_svc;
         _lock_svc = nullptr;
-        const bool is_intrusively_owned =
-            dynamic_cast<dsn::ref_counter*>(lock_svc) != nullptr;
+        const bool finalize_releases_owner_reference =
+            lock_svc->finalize_releases_owner_reference();
         lock_svc->finalize();
-        // Intrusive providers release their owner reference in finalize().
-        if (!is_intrusively_owned)
+        if (!finalize_releases_owner_reference)
         {
             delete lock_svc;
         }

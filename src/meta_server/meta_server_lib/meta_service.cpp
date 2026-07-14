@@ -34,7 +34,6 @@
  */
 #include <sys/stat.h>
 
-#include <dsn/utility/autoref_ptr.h>
 #include <dsn/utility/factory_store.h>
 #include <dsn/dist/meta_state_service.h>
 
@@ -112,9 +111,9 @@ error_code meta_service::stop()
     if (_storage != nullptr)
     {
         dist::meta_state_service* storage = _storage.get();
-        const bool is_intrusively_owned =
-            dynamic_cast<dsn::ref_counter*>(storage) != nullptr;
-        if (is_intrusively_owned)
+        const bool finalize_releases_owner_reference =
+            storage->finalize_releases_owner_reference();
+        if (finalize_releases_owner_reference)
         {
             _storage.reset();
         }
@@ -124,7 +123,7 @@ error_code meta_service::stop()
         {
             result = err;
         }
-        if (!is_intrusively_owned)
+        if (!finalize_releases_owner_reference)
         {
             _storage.reset();
         }
@@ -146,14 +145,13 @@ error_code meta_service::remote_storage_initialize()
         derror("init meta_state_service failed, err = %s", err.to_string());
         return err;
     }
-    const bool is_intrusively_owned =
-        dynamic_cast<dsn::ref_counter*>(storage) != nullptr;
+    const bool finalize_releases_owner_reference =
+        storage->finalize_releases_owner_reference();
     _storage = std::shared_ptr<dsn::dist::meta_state_service>(
         storage,
-        [is_intrusively_owned](dsn::dist::meta_state_service* service)
+        [finalize_releases_owner_reference](dsn::dist::meta_state_service* service)
         {
-            // Intrusive providers release their owner reference in finalize().
-            if (!is_intrusively_owned)
+            if (!finalize_releases_owner_reference)
             {
                 delete service;
             }

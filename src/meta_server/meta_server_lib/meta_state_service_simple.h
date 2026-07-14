@@ -55,6 +55,7 @@ namespace dsn
             // work_path = (argc > 0 ? argv[0] : current_app_data_dir)
             virtual error_code initialize(const std::vector<std::string>& args) override;
             virtual error_code finalize() override { return ERR_OK; }
+            virtual bool finalize_releases_owner_reference() const override { return false; }
 
             virtual std::shared_ptr<meta_state_service::transaction_entries> new_transaction_entries(unsigned int capacity) override;
 
