@@ -33,6 +33,7 @@
  *     xxxx-xx-xx, author, fix bug about xxx
  */
 
+#include <dsn/utility/autoref_ptr.h>
 #include <dsn/utility/factory_store.h>
 #include "meta_server_failure_detector.h"
 #include "server_state.h"
@@ -69,10 +70,18 @@ meta_server_failure_detector::~meta_server_failure_detector()
         _lock_grant_task->cancel(true);
     if (_lock_expire_task)
         _lock_expire_task->cancel(true);
-    if ( _lock_svc )
+    if (_lock_svc)
     {
-        _lock_svc->finalize();
-        delete _lock_svc;
+        dist::distributed_lock_service* lock_svc = _lock_svc;
+        _lock_svc = nullptr;
+        const bool is_intrusively_owned =
+            dynamic_cast<dsn::ref_counter*>(lock_svc) != nullptr;
+        lock_svc->finalize();
+        // Intrusive providers release their owner reference in finalize().
+        if (!is_intrusively_owned)
+        {
+            delete lock_svc;
+        }
     }
 }
 

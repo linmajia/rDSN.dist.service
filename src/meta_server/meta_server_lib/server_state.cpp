@@ -42,6 +42,9 @@
 # include <exception>
 # include <cstring>
 # include <chrono>
+# include <functional>
+# include <new>
+# include <utility>
 
 # include "meta_service.h"
 # include "server_state.h"
@@ -138,6 +141,94 @@ static inline bool reply_service_not_active_if_stopped(meta_service* svc,
     return true;
 }
 
+class cancellable_retry
+{
+public:
+    cancellable_retry(std::function<void()> callback, std::function<void()> on_cancel)
+        : _callback(std::move(callback)), _on_cancel(std::move(on_cancel)), _consumed(false)
+    {
+    }
+
+    ~cancellable_retry()
+    {
+        if (!_consumed.exchange(true, std::memory_order_acq_rel))
+        {
+            _on_cancel();
+        }
+    }
+
+    void run()
+    {
+        if (!_consumed.exchange(true, std::memory_order_acq_rel))
+        {
+            _callback();
+        }
+    }
+
+    void disarm() { _consumed.store(true, std::memory_order_release); }
+
+private:
+    std::function<void()> _callback;
+    std::function<void()> _on_cancel;
+    std::atomic<bool> _consumed;
+};
+
+template <typename TCallback, typename TCancel>
+static task_ptr enqueue_cancellable_retry(clientlet* tracker,
+                                          TCallback&& callback,
+                                          TCancel&& on_cancel,
+                                          std::chrono::milliseconds delay)
+{
+    std::shared_ptr<cancellable_retry> retry;
+    try
+    {
+        retry = std::make_shared<cancellable_retry>(
+            std::forward<TCallback>(callback), std::forward<TCancel>(on_cancel));
+        auto task = tasking::create_task(
+            LPC_META_STATE_HIGH, tracker, [retry] { retry->run(); }, 0);
+        if (task == nullptr)
+        {
+            retry->disarm();
+            return nullptr;
+        }
+
+        task->enqueue(delay);
+        return task;
+    }
+    catch (const std::bad_alloc&)
+    {
+        if (retry != nullptr)
+        {
+            retry->disarm();
+        }
+        derror("allocate delayed meta-state retry failed");
+        return nullptr;
+    }
+}
+
+template<typename TResponse>
+static void cancel_pending_request(meta_service* svc, dsn_message_t request_msg)
+{
+    TResponse response;
+    response.err = svc->is_stopped() ? ERR_SERVICE_NOT_ACTIVE : ERR_TRY_AGAIN;
+    dsn_message_t response_msg = dsn_msg_create_response(request_msg);
+    if (response_msg == nullptr)
+    {
+        derror("create response for cancelled request failed");
+    }
+    else
+    {
+        error_code err = dsn::try_marshall(response_msg, response);
+        dsn_error_t reply_err =
+            err == ERR_OK ? dsn_rpc_reply(response_msg) : dsn_rpc_reply(response_msg, err.get());
+        if (reply_err != ERR_OK)
+        {
+            derror("reply cancelled request failed: %s", error_code(reply_err).to_string());
+        }
+    }
+    dsn_msg_release_ref(request_msg);
+}
+
 server_state::server_state():
     _meta_svc(nullptr), _creating_apps_count(0), _dropping_apps_count(0),
     _cli_json_state_handle(nullptr), _cli_dump_handle(nullptr)
@@ -146,6 +237,8 @@ server_state::server_state():
 
 server_state::~server_state()
 {
+    cancel_retries();
+
     if (_cli_json_state_handle != nullptr)
     {
         dsn_cli_deregister(_cli_json_state_handle);
@@ -155,6 +248,30 @@ server_state::~server_state()
     {
         dsn_cli_deregister(_cli_dump_handle);
         _cli_dump_handle = nullptr;
+    }
+}
+
+void server_state::cancel_retries()
+{
+    dsn_task_tracker_cancel_all(_retry_tasks.tracker());
+}
+
+void server_state::abort_pending_configuration_syncs()
+{
+    zauto_write_lock l(_lock);
+    for (auto& app_entry : _all_apps)
+    {
+        std::shared_ptr<app_state>& app = app_entry.second;
+        size_t partition_count =
+            std::min(app->partitions.size(), app->helpers->contexts.size());
+        for (size_t i = 0; i < partition_count; ++i)
+        {
+            config_context& context = app->helpers->contexts[i];
+            if (context.stage == config_status::pending_remote_sync)
+            {
+                abort_configuration_sync(context, app->partitions[i]);
+            }
+        }
     }
 }
 
@@ -934,11 +1051,21 @@ void server_state::init_app_partition_node(std::shared_ptr<app_state>& app, int 
             // idempotent create-node instead of aborting the whole meta server.
             dwarn("create partition node failed, gpid(%d.%d), err(%s), retry later", app->app_id, pidx, ec.to_string());
             //TODO: add parameter of the retry time interval in config file
-            tasking::enqueue(LPC_META_STATE_HIGH,
-                             _meta_svc,
-                             std::bind(&server_state::init_app_partition_node, this, app, pidx),
-                             0,
-                             std::chrono::milliseconds(1000));
+            task_ptr retry_task = enqueue_cancellable_retry(
+                &_retry_tasks,
+                std::bind(&server_state::init_app_partition_node, this, app, pidx),
+                [] {},
+                std::chrono::milliseconds(1000));
+            if (retry_task == nullptr)
+            {
+                derror("enqueue partition-node retry failed, gpid(%d.%d)",
+                       app->app_id,
+                       pidx);
+                if (!_meta_svc->is_stopped())
+                {
+                    init_app_partition_node(app, pidx);
+                }
+            }
         }
     };
 
@@ -995,8 +1122,19 @@ void server_state::do_app_create(std::shared_ptr<app_state>& app, dsn_message_t 
             // aborting the whole meta server; the create is idempotent
             // (ERR_NODE_ALREADY_EXIST is treated as success).
             dwarn("create app on storage service failed, name: %s, err(%s), continue to create later", app->app_name.c_str(), ec.to_string());
-            tasking::enqueue(LPC_META_STATE_HIGH, _meta_svc, std::bind(&server_state::do_app_create, this, app, msg),
-                             0, std::chrono::seconds(1));
+            task_ptr retry_task = enqueue_cancellable_retry(
+                &_retry_tasks,
+                std::bind(&server_state::do_app_create, this, app, msg),
+                [this, msg] {
+                    cancel_pending_request<configuration_create_app_response>(_meta_svc, msg);
+                },
+                std::chrono::seconds(1));
+            if (retry_task == nullptr)
+            {
+                derror("enqueue app-create retry failed, name: %s, retry immediately",
+                       app->app_name.c_str());
+                do_app_create(app, msg);
+            }
         }
     };
 
@@ -1133,7 +1271,7 @@ void server_state::do_app_drop(std::shared_ptr<app_state>& app, dsn_message_t ms
 
     blob value = app->encode_json_with_status(app_status::AS_DROPPED);
     std::string app_path = get_app_path(*app);
-    auto after_set_app_dropped = [this, app, msg](error_code ec) {
+    auto after_set_app_dropped = [this, app, msg](error_code ec) mutable {
         if (reply_service_not_active_if_stopped<configuration_drop_app_response>(
                 _meta_svc, msg))
         {
@@ -1180,8 +1318,19 @@ void server_state::do_app_drop(std::shared_ptr<app_state>& app, dsn_message_t ms
             // pressure): retry the idempotent set-data instead of aborting the
             // whole meta server.
             dwarn("drop table(id:%d, name:%s) failed, err(%s), continue to drop later", app->app_id, app->app_name.c_str(), ec.to_string());
-            tasking::enqueue(LPC_META_STATE_HIGH, _meta_svc, std::bind(&server_state::do_app_drop, this, app, msg),
-                             0, std::chrono::seconds(1));
+            task_ptr retry_task = enqueue_cancellable_retry(
+                &_retry_tasks,
+                std::bind(&server_state::do_app_drop, this, app, msg),
+                [this, msg] {
+                    cancel_pending_request<configuration_drop_app_response>(_meta_svc, msg);
+                },
+                std::chrono::seconds(1));
+            if (retry_task == nullptr)
+            {
+                derror("enqueue app-drop retry failed, name: %s, retry immediately",
+                       app->app_name.c_str());
+                do_app_drop(app, msg);
+            }
         }
     };
     _meta_svc->get_remote_storage()->set_data(app_path,
@@ -1430,6 +1579,32 @@ void server_state::abort_configuration_sync(config_context& context,
     }
 }
 
+void server_state::schedule_configuration_retry(
+    std::shared_ptr<configuration_update_request>& config_request, config_context& context)
+{
+    context.pending_sync_task = enqueue_cancellable_retry(
+        &_retry_tasks,
+        [this, config_request, &context]() mutable {
+            zauto_write_lock l(_lock);
+            if (_meta_svc->is_stopped())
+            {
+                abort_configuration_sync(context, config_request->config);
+                return;
+            }
+            context.pending_sync_task = update_configuration_on_remote(config_request);
+        },
+        [] {},
+        std::chrono::seconds(1));
+
+    if (context.pending_sync_task == nullptr)
+    {
+        derror("enqueue configuration retry failed, gpid(%d.%d), retry immediately",
+               config_request->config.pid.get_app_id(),
+               config_request->config.pid.get_partition_index());
+        context.pending_sync_task = update_configuration_on_remote(config_request);
+    }
+}
+
 void server_state::on_update_configuration_on_remote_reply(error_code ec, std::shared_ptr<configuration_update_request>& config_request)
 {
     zauto_write_lock l(_lock);
@@ -1446,17 +1621,7 @@ void server_state::on_update_configuration_on_remote_reply(error_code ec, std::s
     dassert(app->status==app_status::AS_AVAILABLE || app->status==app_status::AS_DROPPING, "if app removed, this task should be cancelled");
     if (ec == ERR_TIMEOUT)
     {
-        cc.pending_sync_task = tasking::enqueue(LPC_META_STATE_HIGH, _meta_svc, [this, config_request, &cc] () mutable
-        {
-            if (_meta_svc->is_stopped())
-            {
-                zauto_write_lock l(_lock);
-                abort_configuration_sync(cc, config_request->config);
-                return;
-            }
-            cc.pending_sync_task = update_configuration_on_remote(config_request);
-        },
-        0, std::chrono::seconds(1));
+        schedule_configuration_retry(config_request, cc);
     }
     else if (ec == ERR_OK)
     {
@@ -1500,17 +1665,7 @@ void server_state::on_update_configuration_on_remote_reply(error_code ec, std::s
         // set_data, the same way ERR_TIMEOUT is handled above.
         dwarn("update configuration on remote storage failed, gpid(%d.%d), err(%s), retry later",
               gpid.get_app_id(), gpid.get_partition_index(), ec.to_string());
-        cc.pending_sync_task = tasking::enqueue(LPC_META_STATE_HIGH, _meta_svc, [this, config_request, &cc] () mutable
-        {
-            if (_meta_svc->is_stopped())
-            {
-                zauto_write_lock l(_lock);
-                abort_configuration_sync(cc, config_request->config);
-                return;
-            }
-            cc.pending_sync_task = update_configuration_on_remote(config_request);
-        },
-        0, std::chrono::seconds(1));
+        schedule_configuration_retry(config_request, cc);
     }
 }
 

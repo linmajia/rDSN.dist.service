@@ -34,6 +34,7 @@
  */
 #include <sys/stat.h>
 
+#include <dsn/utility/autoref_ptr.h>
 #include <dsn/utility/factory_store.h>
 #include <dsn/dist/meta_state_service.h>
 
@@ -85,7 +86,6 @@ error_code meta_service::stop()
         balancer_timer_task = _balancer_timer_task;
         _balancer_timer_task = nullptr;
     }
-
     unregister_rpc_handlers();
 
     error_code result = ERR_OK;
@@ -99,23 +99,34 @@ error_code meta_service::stop()
         _failure_detector.reset();
     }
 
-    // Wait for handlers that entered between publishing _stopped=true and
-    // unregistering the RPC endpoints before tearing down their dependencies.
-    zauto_write_lock l(_lifecycle_lock);
-
     if (balancer_timer_task != nullptr)
     {
         balancer_timer_task->cancel(true);
     }
 
     dsn_task_tracker_wait_all(tracker());
+    // No tracked callback can still be publishing a delayed retry.
+    _state->cancel_retries();
+    _state->abort_pending_configuration_syncs();
 
     if (_storage != nullptr)
     {
-        error_code err = _storage->finalize();
+        dist::meta_state_service* storage = _storage.get();
+        const bool is_intrusively_owned =
+            dynamic_cast<dsn::ref_counter*>(storage) != nullptr;
+        if (is_intrusively_owned)
+        {
+            _storage.reset();
+        }
+
+        error_code err = storage->finalize();
         if (result == ERR_OK && err != ERR_OK)
         {
             result = err;
+        }
+        if (!is_intrusively_owned)
+        {
+            _storage.reset();
         }
     }
 
@@ -135,7 +146,18 @@ error_code meta_service::remote_storage_initialize()
         derror("init meta_state_service failed, err = %s", err.to_string());
         return err;
     }
-    _storage.reset(storage);
+    const bool is_intrusively_owned =
+        dynamic_cast<dsn::ref_counter*>(storage) != nullptr;
+    _storage = std::shared_ptr<dsn::dist::meta_state_service>(
+        storage,
+        [is_intrusively_owned](dsn::dist::meta_state_service* service)
+        {
+            // Intrusive providers release their owner reference in finalize().
+            if (!is_intrusively_owned)
+            {
+                delete service;
+            }
+        });
 
     std::vector<std::string> slices;
     utils::split_args(_meta_opts.cluster_root.c_str(), slices, '/');
@@ -382,17 +404,17 @@ void meta_service::register_rpc_handlers()
 
 void meta_service::unregister_rpc_handlers()
 {
-    unregister_rpc_handler(RPC_CM_CONTROL_META);
-    unregister_rpc_handler(RPC_CM_PROPOSE_BALANCER);
-    unregister_rpc_handler(RPC_CM_CLUSTER_INFO);
-    unregister_rpc_handler(RPC_CM_LIST_NODES);
-    unregister_rpc_handler(RPC_CM_LIST_APPS);
-    unregister_rpc_handler(RPC_CM_DROP_APP);
-    unregister_rpc_handler(RPC_CM_CREATE_APP);
-    unregister_rpc_handler(RPC_CM_UPDATE_PARTITION_CONFIGURATION);
-    unregister_rpc_handler(RPC_CM_QUERY_PARTITION_CONFIG_BY_INDEX);
-    unregister_rpc_handler(RPC_CM_CONFIG_SYNC);
-    unregister_rpc_handler(RPC_CM_QUERY_NODE_PARTITIONS);
+    unregister_rpc_handler_and_wait(RPC_CM_CONTROL_META);
+    unregister_rpc_handler_and_wait(RPC_CM_PROPOSE_BALANCER);
+    unregister_rpc_handler_and_wait(RPC_CM_CLUSTER_INFO);
+    unregister_rpc_handler_and_wait(RPC_CM_LIST_NODES);
+    unregister_rpc_handler_and_wait(RPC_CM_LIST_APPS);
+    unregister_rpc_handler_and_wait(RPC_CM_DROP_APP);
+    unregister_rpc_handler_and_wait(RPC_CM_CREATE_APP);
+    unregister_rpc_handler_and_wait(RPC_CM_UPDATE_PARTITION_CONFIGURATION);
+    unregister_rpc_handler_and_wait(RPC_CM_QUERY_PARTITION_CONFIG_BY_INDEX);
+    unregister_rpc_handler_and_wait(RPC_CM_CONFIG_SYNC);
+    unregister_rpc_handler_and_wait(RPC_CM_QUERY_NODE_PARTITIONS);
 }
 
 int meta_service::check_primary(dsn_message_t req)
@@ -422,7 +444,6 @@ int meta_service::check_primary(dsn_message_t req)
 }
 
 #define RPC_CHECK_STATUS(dsn_msg, response_struct)\
-    zauto_read_lock lifecycle_l(_lifecycle_lock);\
     dinfo("rpc %s called", __FUNCTION__);\
     if (_stopped.load(std::memory_order_acquire)) {\
         response_struct.err = ERR_SERVICE_NOT_ACTIVE;\
