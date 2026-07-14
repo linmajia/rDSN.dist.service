@@ -90,6 +90,10 @@ namespace dsn
              */
             virtual error_code finalize() = 0;
 
+            // True when finalize() releases the provider's ownership reference,
+            // so the caller must not delete the provider afterward.
+            virtual bool finalize_releases_owner_reference() const = 0;
+
             /*
              * create a transaction_entries structure
              * capacity: the maximum entries the structure can hold

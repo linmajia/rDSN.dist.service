@@ -59,11 +59,13 @@ public:
     virtual ~meta_service();
 
     error_code start();
+    error_code stop();
 
     const replication_options& get_options() const { return _opts; }
     const meta_options& get_meta_options() const { return _meta_opts; }
     dist::meta_state_service* get_remote_storage() { return _storage.get(); }
     server_load_balancer* get_balancer() { return _balancer.get(); }
+    bool is_stopped() const { return _stopped.load(std::memory_order_acquire); }
     int64_t get_control_flags() const
     {
         return _meta_ctrl_flags.load(std::memory_order_relaxed);
@@ -88,6 +90,7 @@ public:
 
 private:
     void register_rpc_handlers();
+    void unregister_rpc_handlers();
 
     // client => meta server
     // query partition configuration
@@ -136,13 +139,16 @@ private:
     std::shared_ptr<dist::meta_state_service> _storage;
     std::shared_ptr<server_load_balancer> _balancer;
 
+    mutable zrwlock_nr _lifecycle_lock;
     mutable zrwlock_nr _meta_lock;
     std::set<rpc_address> _alive_set;
     std::set<rpc_address> _dead_set;
 
     int  _node_live_percentage_threshold_for_update;
     std::atomic<bool> _started;
+    std::atomic<bool> _stopped;
     std::atomic<int64_t> _meta_ctrl_flags;
+    task_ptr _balancer_timer_task;
 
     std::string _cluster_root;
 };

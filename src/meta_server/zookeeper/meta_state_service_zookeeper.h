@@ -56,6 +56,7 @@ public:
     // no parameter need
     virtual error_code initialize(const std::vector<std::string>& args) override;
     virtual error_code finalize() override;
+    virtual bool finalize_releases_owner_reference() const override { return true; }
 
     virtual std::shared_ptr<meta_state_service::transaction_entries> new_transaction_entries(unsigned int capacity) override;
 

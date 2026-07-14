@@ -37,6 +37,7 @@
 
 # include <unordered_map>
 
+# include <dsn/cpp/clientlet.h>
 # include <dsn/dist/replication/replication_other_types.h>
 
 # include "replication_common.h"
@@ -91,6 +92,8 @@ public:
     //return true if no need to do any actions
     bool check_all_partitions();
     void clear_proposals();
+    void cancel_retries();
+    void abort_pending_configuration_syncs();
 
     // for test
     void set_config_change_subscriber_for_test(config_change_subscriber subscriber);
@@ -114,6 +117,10 @@ private:
 
     task_ptr update_configuration_on_remote(std::shared_ptr<configuration_update_request>& config_request);
     void on_update_configuration_on_remote_reply(error_code ec, std::shared_ptr<configuration_update_request>& request);
+    void schedule_configuration_retry(std::shared_ptr<configuration_update_request>& request,
+                                      config_context& context);
+    void abort_configuration_sync(config_context& context,
+                                  const partition_configuration& config);
     void update_configuration_locally(app_state& app, std::shared_ptr<configuration_update_request>& config_request);
     void apply_migration_actions(migration_list& ml);
     bool request_check(const partition_configuration& old, const configuration_update_request& request);
@@ -200,6 +207,7 @@ private:
 
     dsn_handle_t                                        _cli_json_state_handle;
     dsn_handle_t                                        _cli_dump_handle;
+    clientlet                                           _retry_tasks;
 public:
     void json_state(std::stringstream& out) const;
     static void static_cli_json_state(void* context, int argc, const char** argv, dsn_cli_reply* reply);

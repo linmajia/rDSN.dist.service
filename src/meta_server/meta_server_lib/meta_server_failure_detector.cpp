@@ -69,10 +69,17 @@ meta_server_failure_detector::~meta_server_failure_detector()
         _lock_grant_task->cancel(true);
     if (_lock_expire_task)
         _lock_expire_task->cancel(true);
-    if ( _lock_svc )
+    if (_lock_svc)
     {
-        _lock_svc->finalize();
-        delete _lock_svc;
+        dist::distributed_lock_service* lock_svc = _lock_svc;
+        _lock_svc = nullptr;
+        const bool finalize_releases_owner_reference =
+            lock_svc->finalize_releases_owner_reference();
+        lock_svc->finalize();
+        if (!finalize_releases_owner_reference)
+        {
+            delete lock_svc;
+        }
     }
 }
 
