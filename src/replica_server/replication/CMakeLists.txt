@@ -39,4 +39,6 @@ set(MY_BINPLACES "")
 
 dsn_add_shared_library()
 
-file(COPY test/ DESTINATION "${CMAKE_BINARY_DIR}/test/${MY_PROJ_NAME}")
+if(BUILD_TESTING)
+    file(COPY test/ DESTINATION "${CMAKE_BINARY_DIR}/test/${MY_PROJ_NAME}")
+endif()

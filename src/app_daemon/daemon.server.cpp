@@ -63,11 +63,15 @@ extern char **environ;
 # endif
 
 using namespace ::dsn::replication;
+# ifdef DSN_WITH_EMBEDDED_TESTS
 extern void daemon_register_test_server();
+# endif
 
 MODULE_INIT_BEGIN(daemon)
     dassert(dsn::register_app< ::dsn::dist::daemon>("daemon"), "register daemon app failed");
+# ifdef DSN_WITH_EMBEDDED_TESTS
     daemon_register_test_server();
+# endif
 MODULE_INIT_END
 
 namespace dsn

@@ -36,12 +36,16 @@
 # include <dsn/dist/replication/meta_service_app.h>
 # include <dsn/utility/module_init.cpp.h>
 
+# ifdef DSN_WITH_EMBEDDED_TESTS
 extern void fd_test_init();
 extern void lock_test_init();
+# endif
 
 MODULE_INIT_BEGIN(meta)
     dassert(dsn::register_app< ::dsn::service::meta_service_app>("meta"),
             "register meta app failed");
+# ifdef DSN_WITH_EMBEDDED_TESTS
     fd_test_init();
     lock_test_init();
+# endif
 MODULE_INIT_END
