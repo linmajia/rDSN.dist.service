@@ -36,6 +36,7 @@
 # include "repli.app.h"
 # include <dsn/cpp/utils.h>
 # include <iostream>
+# include <cstdio>
 # include <thread>
 # include <chrono>
 # if !defined (_WIN32)
@@ -48,7 +49,7 @@ int main(int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::cerr << "USAGE: " << argv[0] << " <command> <params...>" << std::endl;
+        fprintf(stderr, "USAGE: %s <command> <params...>\n", argv[0]);
         dsn::service::repli_app::usage();
         return -1;
     }
@@ -63,19 +64,21 @@ int main(int argc, char** argv)
     slen = readlink("/proc/self/exe", buf, sizeof(buf));
 # endif
 
-    if (slen != -1)
+    if (slen <= 0 || slen >= (int)sizeof(buf))
     {
-        dassert(slen < 4906, "");
-        buf[slen] = 0;
+        fprintf(stderr, "ERROR: cannot determine the executable path\n");
+        dsn::service::repli_app::usage();
+        return -1;
+    }
+    buf[slen] = 0;
 
-        std::string dir = dsn::utils::filesystem::remove_file_name(buf);
-        conf = dir + "/config.ini";
-        if (!dsn::utils::filesystem::file_exists(conf))
-        {
-            std::cerr << "ERROR: config file not found: " << conf << std::endl;
-            dsn::service::repli_app::usage();
-            return -1;
-        }
+    std::string dir = dsn::utils::filesystem::remove_file_name(buf);
+    conf = dir + "/config.ini";
+    if (!dsn::utils::filesystem::file_exists(conf))
+    {
+        fprintf(stderr, "ERROR: config file not found: %s\n", conf.c_str());
+        dsn::service::repli_app::usage();
+        return -1;
     }
 
     // register all possible service apps

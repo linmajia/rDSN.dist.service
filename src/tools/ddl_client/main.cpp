@@ -132,7 +132,10 @@ int main(int argc, char** argv)
             {
                 std::vector<std::string> kv2;
                 ::dsn::utils::split_args(kv.c_str(), kv2, '=');
-                envs[kv2[0]] = kv2.size() >= 2 ? kv2[1] : "";
+                if (!kv2.empty())
+                {
+                    envs[kv2[0]] = kv2.size() >= 2 ? kv2[1] : "";
+                }
             }
             std::cout << "envs:" << argv[index] << std::endl;
         }

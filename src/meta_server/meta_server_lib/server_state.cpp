@@ -516,7 +516,10 @@ error_code server_state::initialize_default_apps()
     int total_sections;
     int used_sections = sizeof(sections)/sizeof(const char*);
     total_sections = dsn_config_get_all_sections(sections, &used_sections);
-    dassert(total_sections == used_sections, "too many sections (>10240) defined in config files");
+    if (total_sections != used_sections)
+    {
+        dwarn("too many sections (>10240) defined in config files, some are ignored");
+    }
     ddebug("start to do initialize");
 
     app_info default_app;
@@ -536,8 +539,11 @@ error_code server_state::initialize_default_apps()
             default_app.max_replica_count = (int)dsn_config_get_value_uint64(s, "max_replica_count", 3, "max_replica count in app");
             //TODO: setup envs
 
-            dassert(default_app.app_name.length() > 0, "'[%s] app_name' not specified", s);
-            dassert(default_app.app_type.length() > 0, "'[%s] app_type' not specified", s);
+            if (default_app.app_name.length() == 0 || default_app.app_type.length() == 0)
+            {
+                derror("'[%s] app_name' or 'app_type' not specified, ignore this section", s);
+                continue;
+            }
 
             std::shared_ptr<app_state> app = app_state::create(default_app);
             _all_apps.emplace(app->app_id, app);
