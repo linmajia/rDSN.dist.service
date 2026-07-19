@@ -57,8 +57,22 @@ meta_server_failure_detector::meta_server_failure_detector(meta_service* svc)
         opt.distributed_lock_service_type.c_str(),
         PROVIDER_TYPE_MAIN
         );
-    error_code err = _lock_svc->initialize(opt.distributed_lock_service_args);
-    dassert(err == ERR_OK, "init distributed_lock_service failed, err = %s", err.to_string());
+    if (_lock_svc == nullptr)
+    {
+        // factory_store::create returns null (it does not abort) when the
+        // configured distributed_lock_service_type is missing, empty or of the
+        // wrong type; leave _lock_svc null and report it here instead of
+        // dereferencing it. meta_service::start() checks has_lock_service()
+        // before acquire_leader_lock() (which would call _lock_svc->lock()),
+        // so a null lock service becomes a graceful startup failure.
+        derror("create distributed_lock_service failed, distributed_lock_service_type = %s",
+               opt.distributed_lock_service_type.c_str());
+    }
+    else
+    {
+        error_code err = _lock_svc->initialize(opt.distributed_lock_service_args);
+        dassert(err == ERR_OK, "init distributed_lock_service failed, err = %s", err.to_string());
+    }
 
     _primary_lock_id = "dsn.meta.server.leader";
 }
