@@ -228,7 +228,11 @@ void greedy_load_balancer::greedy_copy_secondary()
 // load balancer based on ford-fulkerson
 void greedy_load_balancer::greedy_balancer()
 {
-    dassert(alive_nodes>2, "too few alive nodes will lead to freeze");
+    if (alive_nodes <= 2)
+    {
+        derror("too few alive nodes (%d), skip this balance round to avoid freeze", alive_nodes);
+        return;
+    }
 
     const node_mapper& nodes = *(_view->nodes);
     size_t graph_nodes = alive_nodes + 2;

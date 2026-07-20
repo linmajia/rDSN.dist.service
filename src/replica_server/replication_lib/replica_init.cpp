@@ -445,7 +445,12 @@ bool replica::replay_mutation(mutation_ptr& mu, bool is_private)
     {
         _config.ballot = mu->data.header.ballot;
         bool ret = update_local_configuration(_config, true);
-        dassert(ret, "");
+        if (!ret)
+        {
+            dwarn("%s: replay mutation ballot = %" PRId64 ", decree = %" PRId64 ", update local configuration failed",
+                name(), mu->data.header.ballot, d);
+            return false;
+        }
     }
 
     dinfo(
@@ -458,7 +463,11 @@ bool replica::replay_mutation(mutation_ptr& mu, bool is_private)
 
     // prepare
     error_code err = _prepare_list->prepare(mu, partition_status::PS_INACTIVE);
-    dassert (err == ERR_OK, "");
+    if (err != ERR_OK)
+    {
+        derror("%s: replay mutation decree = %" PRId64 ", prepare failed, err = %s", name(), d, err.to_string());
+        return false;
+    }
 
     return true;
 }

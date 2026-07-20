@@ -139,6 +139,15 @@ error_code meta_service::remote_storage_initialize()
         _meta_opts.meta_state_service_type.c_str(),
         PROVIDER_TYPE_MAIN
         );
+    if (storage == nullptr)
+    {
+        // factory_store::create returns null (it does not abort) when the
+        // configured meta_state_service_type is missing, empty or of the wrong
+        // type; fail startup gracefully instead of dereferencing a null pointer.
+        derror("create meta_state_service failed, meta_state_service_type = %s",
+               _meta_opts.meta_state_service_type.c_str());
+        return ERR_SERVICE_NOT_FOUND;
+    }
     error_code err = storage->initialize(_meta_opts.meta_state_service_args);
     if (err != ERR_OK)
     {
@@ -315,6 +324,16 @@ error_code meta_service::start()
     //can tell others who is the current leader
     register_rpc_handlers();
     
+    if (!_failure_detector->has_lock_service())
+    {
+        // the distributed_lock_service provider could not be created (the
+        // configured distributed_lock_service_type is missing, empty or of the
+        // wrong type); acquire_leader_lock() would call _lock_svc->lock() in a
+        // while(true) loop and crash. Fail startup gracefully instead.
+        derror("distributed_lock_service is not available, cannot acquire the leader lock");
+        return ERR_SERVICE_NOT_FOUND;
+    }
+
     _failure_detector->acquire_leader_lock();
     dassert(_failure_detector->is_primary(), "must be primary at this point");
     ddebug("%s got the primary lock, start to recover server state from remote storage", primary_address().to_string());
@@ -334,6 +353,17 @@ error_code meta_service::start()
         _meta_opts.server_load_balancer_type.c_str(),
         PROVIDER_TYPE_MAIN,
         this);
+    if (balancer == nullptr)
+    {
+        // factory_store::create returns null (it does not abort) when the
+        // configured server_load_balancer_type is missing, empty or of the
+        // wrong type; fail startup gracefully instead of leaving _balancer null
+        // and later dereferencing it (get_balancer()->reconfig/cure/balance)
+        // during config-sync and balancer operations.
+        derror("create server_load_balancer failed, server_load_balancer_type = %s",
+               _meta_opts.server_load_balancer_type.c_str());
+        return ERR_SERVICE_NOT_FOUND;
+    }
     _balancer.reset(balancer);
 
     _failure_detector->sync_node_state_and_start_service();

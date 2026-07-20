@@ -51,6 +51,7 @@ public:
     virtual ~meta_server_failure_detector();
 
     bool is_primary() const { return _is_primary.load(std::memory_order_relaxed); }
+    bool has_lock_service() const { return _lock_svc != nullptr; }
     rpc_address get_primary();
     
     void acquire_leader_lock();

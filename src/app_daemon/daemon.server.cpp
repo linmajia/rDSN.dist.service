@@ -43,6 +43,8 @@
 # include <fstream>
 # include <future>
 # include <cstring>
+# include <cstdio>
+# include <vector>
 # include <chrono>
 
 # if defined(__linux__)
@@ -377,10 +379,12 @@ namespace dsn
                         }
                     }
 
-                    dassert(i < (int)appc.config.secondaries.size(),
-                        "host address %s must exist in secondary list of partition %d.%d",
-                        host.to_string(), appc.config.pid.get_app_id(), appc.config.pid.get_partition_index()
-                    );
+                    if (i >= (int)appc.config.secondaries.size())
+                    {
+                        derror("host address %s not found in secondary list of partition %d.%d, skip",
+                            host.to_string(), appc.config.pid.get_app_id(), appc.config.pid.get_partition_index());
+                        continue;
+                    }
                     
                     bool found = false;
                     auto it = apps.find(appc.config.pid);
@@ -416,6 +420,12 @@ namespace dsn
                             req.type = config_type::CT_REMOVE;
 
                             // worker nodes stored in last-drops
+                            if (i >= (int)appc.config.last_drops.size())
+                            {
+                                derror("partition %d.%d last_drops has no entry at index %d, skip",
+                                    appc.config.pid.get_app_id(), appc.config.pid.get_partition_index(), i);
+                                continue;
+                            }
                             req.node = appc.config.last_drops[i];
 
                             std::shared_ptr<app_internal> app(new app_internal(req));
@@ -861,7 +871,12 @@ namespace dsn
                 // add deployment path as DSN_DEPLOYMENT_PATH
                 std::string exe_path;
                 auto err = utils::filesystem::get_current_process_image_path(exe_path);
-                dassert(err == ERR_OK, "get_current_process_image_path failed, err = %s", err.to_string());
+                if (err != ERR_OK)
+                {
+                    derror("get_current_process_image_path failed, err = %s", err.to_string());
+                    kill_app(std::move(app));
+                    return;
+                }
                 std::string host_name = utils::filesystem::get_file_name(exe_path);
                 dassert(host_name.substr(0, strlen("dsn.svchost")) == "dsn.svchost",
                     "invalid daemon exe name %s vs dsn.svchost",
@@ -963,6 +978,75 @@ namespace dsn
                     break;
                 }
 # else
+                // Prepare everything the child will need BEFORE fork(). After fork() in a
+                // multithreaded process the child may call only async-signal-safe functions
+                // until execve(): any mutex another thread held at fork time (heap
+                // allocator, rDSN logging queue, the environ lock, ...) stays locked
+                // forever in the child. So all allocation, string building, environment
+                // assembly and logging happen here in the parent; the child below issues
+                // only async-signal-safe syscalls (open/dup2/close/chdir/execve/_exit).
+                std::string err_path = utils::filesystem::path_combine(app->working_dir, "foo.err");
+                std::string out_path = utils::filesystem::path_combine(app->working_dir, "foo.out");
+
+                const char* current_ld_path = getenv("LD_LIBRARY_PATH");
+                std::string libs_new = pkg->package_dir + ":" + deployment_dir;
+                if (current_ld_path != nullptr && current_ld_path[0] != '\0')
+                {
+                    libs_new += ":";
+                    libs_new += current_ld_path;
+                }
+                std::string ld_env_entry = "LD_LIBRARY_PATH=" + libs_new;
+
+                std::stringstream cargs_ss;
+                cargs_ss << "port=" << port;
+                for (auto& kv : envs)
+                {
+                    cargs_ss << ";" << kv.first << "=" << kv.second;
+                }
+                std::string cargs = cargs_ss.str();
+
+                // Assemble the child's environment (parent env with LD_LIBRARY_PATH
+                // replaced) up front, so the child does not need setenv(), which is not
+                // async-signal-safe.
+                std::vector<char*> child_env;
+                for (char** e = dsn_environ; e != nullptr && *e != nullptr; ++e)
+                {
+                    if (strncmp(*e, "LD_LIBRARY_PATH=", strlen("LD_LIBRARY_PATH=")) != 0)
+                    {
+                        child_env.push_back(*e);
+                    }
+                }
+                child_env.push_back(const_cast<char*>(ld_env_entry.c_str()));
+                child_env.push_back(nullptr);
+
+                // Assemble argv too (pointers into parent-owned strings, valid in the
+                // child's copy-on-write address space).
+                char* const argv_no_overwrite[] = {
+                    (char*)"dsn.svchost",
+                    (char*)config_file.c_str(),
+                    (char*)"-cargs",
+                    (char*)cargs.c_str(),
+                    nullptr
+                };
+                char* const argv_overwrite[] = {
+                    (char*)"dsn.svchost",
+                    (char*)config_file.c_str(),
+                    (char*)"-cargs",
+                    (char*)cargs.c_str(),
+                    (char*)"-overwrite",
+                    (char*)overwrites.c_str(),
+                    nullptr
+                };
+
+                dwarn("try start app %s with command %s %s -cargs %s -overwrite %s at working dir %s ...",
+                    app->info.app_type.c_str(),
+                    exe_path.c_str(),
+                    config_file.c_str(),
+                    cargs.c_str(),
+                    overwrites.c_str(),
+                    app->working_dir.c_str()
+                );
+
                 int child = fork();
                 if (-1 == child)
                 {
@@ -973,91 +1057,65 @@ namespace dsn
                 // child process
                 else if (child == 0)
                 {
+                    // Async-signal-safe zone: everything below runs between fork() and
+                    // execve() in the forked child of a multithreaded process, so it uses
+                    // only async-signal-safe syscalls plus the values precomputed above.
+                    // Errors go to the inherited stderr fd via fprintf(stderr,...) (never
+                    // derror(), which re-enters the rDSN runtime) and abandon the child
+                    // with _exit() -- not return/exit(), which would unwind into the
+                    // parent's logic or flush stdio buffers duplicated from the parent.
+
                     // redirect std output and err
                     int ret;
-                    int serr = open(
-                        utils::filesystem::path_combine(app->working_dir, "foo.err").c_str(),
-                        O_RDWR | O_CREAT, S_IRUSR | S_IWUSR
-                    );
-                    dassert(serr >= 0, "open stderr file failed, err = %d", errno);
+                    int serr = open(err_path.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+                    if (serr < 0)
+                    {
+                        fprintf(stderr, "open stderr file failed, err = %d\n", errno);
+                        _exit(1);
+                    }
                     ret = dup2(serr, STDERR_FILENO);
-                    dassert(close(serr) == 0, "close stderr file failed, err = %d", errno);
+                    if (close(serr) != 0)
+                    {
+                        fprintf(stderr, "close stderr file failed, err = %d\n", errno);
+                    }
                     if (ret == -1)
                     {
-                        dassert(false, "redirect stderr failed, err = %d", errno);
+                        fprintf(stderr, "redirect stderr failed, err = %d\n", errno);
+                        _exit(1);
                     }
 
-                    int sout = open(
-                        utils::filesystem::path_combine(app->working_dir, "foo.out").c_str(),
-                        O_RDWR | O_CREAT, S_IRUSR | S_IWUSR
-                    );
-                    dassert(sout >= 0, "open stdout file failed, err = %d", errno);
+                    int sout = open(out_path.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+                    if (sout < 0)
+                    {
+                        fprintf(stderr, "open stdout file failed, err = %d\n", errno);
+                        _exit(1);
+                    }
                     ret = dup2(sout, STDOUT_FILENO);
-                    dassert(close(sout) == 0, "close stdout file failed, err = %d", errno);
+                    if (close(sout) != 0)
+                    {
+                        fprintf(stderr, "close stdout file failed, err = %d\n", errno);
+                    }
                     if (ret == -1)
                     {
-                        dassert(false, "redirect stdout failed, err = %d", errno);
+                        fprintf(stderr, "redirect stdout failed, err = %d\n", errno);
+                        _exit(1);
                     }
 
-                    // set up envs
                     if (chdir(app->working_dir.c_str()) == -1)
                     {
-                        dassert(false, "change working dir to '%s' failed, err = %d", app->working_dir.c_str(), errno);
+                        fprintf(stderr, "change working dir to '%s' failed, err = %d\n", app->working_dir.c_str(), errno);
+                        _exit(1);
                     }
 
-                    const char* current_ld_path = getenv("LD_LIBRARY_PATH");
-                    std::string libs_new =
-                        pkg->package_dir + ":" +
-                        deployment_dir;
-                    if (current_ld_path != nullptr && current_ld_path[0] != '\0')
-                    {
-                        libs_new += ":";
-                        libs_new += current_ld_path;
-                    }
-
-                    setenv("LD_LIBRARY_PATH", libs_new.c_str(), 1);
-
-                    std::stringstream ss;
-                    ss << "port=" << port;
-                    for (auto& kv : envs)
-                    {
-                        ss << ";" << kv.first << "=" << kv.second;
-                    }
-                    std::string cargs = ss.str();
-
-                    dwarn("try start app %s with command %s %s -cargs %s -overwrite %s at working dir %s ...",
-                        app->info.app_type.c_str(),
-                        exe_path.c_str(),
-                        config_file.c_str(),
-                        cargs.c_str(),
-                        overwrites.c_str(),
-                        app->working_dir.c_str()
-                    );
-
-                    // run command
+                    // run command (env + argv were assembled before fork(); LD_LIBRARY_PATH
+                    // is supplied through child_env, so the child needs no setenv())
                     if (overwrites.length() == 0)
                     {
-                        char* const argv[] = {
-                            (char*)"dsn.svchost",
-                            (char*)config_file.c_str(),
-                            (char*)"-cargs",
-                            (char*)cargs.c_str(),
-                            nullptr
-                        };
-                        execve(exe_path.c_str(), argv, dsn_environ);
+                        execve(exe_path.c_str(), argv_no_overwrite, child_env.data());
                     }
                     else
                     {
-                        char* const argv[] = {
-                            (char*)"dsn.svchost",
-                            (char*)config_file.c_str(),
-                            (char*)"-cargs",
-                            (char*)cargs.c_str(),
-                            (char*)"-overwrite",
-                            (char*)overwrites.c_str(),
-                            nullptr
-                        };
-                        execve(exe_path.c_str(), argv, dsn_environ);
+                        execve(exe_path.c_str(), argv_overwrite, child_env.data());
                     }
                     _exit(127);
                 }
