@@ -40,6 +40,17 @@ namespace dsn { namespace replication {
 
 mutation_cache::mutation_cache(decree init_decree, int max_count)
 {
+    // max_count originates from [replication] max_mutation_count_in_prepare_list (operator config)
+    // and is passed straight through from prepare_list. A value <= 0 makes _array empty and turns
+    // every "% _max_count" ring-buffer operation below (put/pop_min/get/remove by decree) into a
+    // modulo-by-zero (SIGFPE), crashing the replica. Clamp to a minimal working capacity with a
+    // warning instead of crashing on a bad configuration.
+    if (max_count <= 0)
+    {
+        dwarn("invalid mutation_cache capacity %d, reset to 1", max_count);
+        max_count = 1;
+    }
+
     _max_count = max_count;
     _array.resize(max_count, nullptr);
 

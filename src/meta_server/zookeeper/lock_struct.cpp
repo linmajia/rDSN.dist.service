@@ -231,7 +231,15 @@ void lock_struct::owner_change(lock_struct_ptr _this, int zoo_event)
         lock_state::uninitialized, lock_state::pending, lock_state::cancelled, lock_state::expired
     };
     _this->check_hashed_access();
-    __check_code(_this->_state, allow_state, 3, string_state(_this->_state));
+    // allow_state has 4 entries; the size argument must cover all of them. The last
+    // entry (lock_state::expired) is a legitimate state here -- a zookeeper session
+    // expiry (on_expire -> _state = expired) can be dispatched on this replica's hash
+    // thread before an already-queued owner-node watcher event runs owner_change, so
+    // owner_change legitimately observes _state == expired (and returns gracefully at
+    // the "cancelled || expired" branch below). Passing 3 instead of 4 excluded
+    // expired from the allowed set, so __check_code's dassert aborted the whole meta
+    // server on that benign race. Use 4 so expired is accepted.
+    __check_code(_this->_state, allow_state, 4, string_state(_this->_state));
     
     if (_this->_state==lock_state::uninitialized) {
         dwarn("this is mainly due to a timeout happens before, just ignore the event %s", string_zooevt(zoo_event));
@@ -248,8 +256,21 @@ void lock_struct::owner_change(lock_struct_ptr _this, int zoo_event)
     }
     else if (ZOO_NOTWATCHING_EVENT == zoo_event) 
         _this->get_lock_owner(false);
-    else 
-        dassert(false, "unexpected event");
+    else
+        // owner_change is the watch installed by get_lock_owner()'s ZOO_GET (getData)
+        // on the current owner node. A getData watch does not only fire on DELETED: per
+        // the ZooKeeper API it also fires ZOO_CHANGED_EVENT if the node's data is
+        // modified (e.g. by an operator via zkCli, a monitoring tool, or another client
+        // sharing the ensemble), and could in principle deliver other event types. The
+        // owner has NOT been released in those cases, so aborting the whole meta server
+        // via dassert(false) is wrong. Log the unexpected event and simply re-read the
+        // owner, which re-establishes the watch and re-evaluates ownership -- the same
+        // safe recovery used for ZOO_NOTWATCHING_EVENT above.
+        {
+            dwarn("owner_change got unexpected event %s, re-reading lock owner",
+                  string_zooevt(zoo_event));
+            _this->get_lock_owner(false);
+        }
 }
 /*static*/
 void lock_struct::after_remove_duplicated_locknode(lock_struct_ptr _this, int ec, std::shared_ptr<std::string> path)
@@ -395,11 +416,26 @@ void lock_struct::after_self_check(lock_struct_ptr _this, int ec, std::shared_pt
                _this->_myself._node_seq_name.c_str(), _this->_myself._node_value.c_str());
         return;
     }
-    dassert(*value==_this->_myself._node_value, 
-            "lock(%s) get wrong value, local myself(%s), from zookeeper(%s)", 
-            _this->_lock_id.c_str(), _this->_myself._node_value.c_str(), 
-            value->c_str()
-           );
+    // We are re-reading our OWN lock node to confirm we still hold the lock. The value
+    // was written once at node creation and this code never rewrites it, so normally it
+    // must equal _myself._node_value. It can nevertheless differ if the znode was
+    // modified out-of-band -- e.g. an operator via zkCli, a monitoring/repair tool, or
+    // another client sharing the (possibly open-ACL) ensemble calling setData on the
+    // path. That is an external, recoverable condition, not an internal logic error, so
+    // aborting the whole meta server via dassert is wrong. Treat a value that is no
+    // longer ours exactly like the "node is gone" (ZNONODE) case above: we can no longer
+    // trust that we hold the lock, so relinquish it through on_expire() instead of
+    // crashing.
+    if (*value != _this->_myself._node_value)
+    {
+        derror("lock(%s) self check got wrong value, local myself(%s), from zookeeper(%s); "
+               "treat as expired",
+               _this->_lock_id.c_str(),
+               _this->_myself._node_value.c_str(),
+               value->c_str());
+        _this->on_expire();
+        return;
+    }
 }
 
 void lock_struct::get_lock_owner(bool watch_myself)

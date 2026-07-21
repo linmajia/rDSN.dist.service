@@ -355,7 +355,24 @@ void replication_options::initialize()
 
 void replication_options::sanity_check()
 {
-    dassert (max_mutation_count_in_prepare_list >= staleness_for_commit, "");
+    // Both operands are operator-supplied config values ([replication] staleness_for_commit
+    // and max_mutation_count_in_prepare_list). The prepare list must be able to hold at least
+    // one mutation for every outstanding two-phase-commit round, so
+    // max_mutation_count_in_prepare_list must be >= staleness_for_commit. A perfectly plausible
+    // misconfiguration (e.g. raising staleness_for_commit without bumping the prepare-list cap)
+    // violates this, and the original dassert aborts the entire replica server at startup with
+    // an empty diagnostic. Repair the relationship instead of crashing: grow the prepare-list cap
+    // up to the staleness window (which only costs a little more memory and keeps 2PC correct)
+    // and warn, so a bad config degrades to a corrected value rather than a process abort.
+    if (max_mutation_count_in_prepare_list < staleness_for_commit)
+    {
+        dwarn("[replication] max_mutation_count_in_prepare_list (%d) < staleness_for_commit (%d); "
+              "raising max_mutation_count_in_prepare_list to %d to satisfy the prepare-list invariant",
+              max_mutation_count_in_prepare_list,
+              staleness_for_commit,
+              staleness_for_commit);
+        max_mutation_count_in_prepare_list = staleness_for_commit;
+    }
 }
    
 /*static*/ bool replica_helper::remove_node(::dsn::rpc_address node, /*inout*/ std::vector< ::dsn::rpc_address>& nodeList)
