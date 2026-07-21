@@ -133,6 +133,16 @@ void greedy_load_balancer::greedy_copy_primary()
     node_mapper& nodes = *(_view->nodes);
     while ( changing_primaries[*pri_queue.begin()]<replicas_low || changing_primaries[*pri_queue.rbegin()]>replicas_high )
     {
+        // Moving a primary requires two distinct nodes (a source and a destination). Each
+        // iteration erases both the min and the max entry but only re-inserts the min, so the
+        // queue shrinks by one every round and can collapse to a single node while the
+        // loop condition (an under/over-loaded remaining node) still holds. With one element,
+        // begin()==rbegin(), the two erases below would double-erase and then decrement end()
+        // on an empty std::set (undefined behavior), and the min!=max assertion would abort.
+        // Stop the round instead: the residual imbalance is picked up on a later balancer pass.
+        if (pri_queue.size() < 2)
+            break;
+
         dsn::rpc_address min_load = *pri_queue.begin();
         dsn::rpc_address max_load = *pri_queue.rbegin();
 
@@ -143,6 +153,20 @@ void greedy_load_balancer::greedy_copy_primary()
         pri_queue.erase(--pri_queue.end());
 
         dassert(min_load!=max_load, "min load and max load machines shouldn't the same");
+
+        // max_load is selected via the projected `changing_primaries` counter, which starts at
+        // each node's real primary count but is only ever incremented (for min_load nodes below).
+        // A node that began with zero real primaries can therefore climb to become max_load even
+        // though its real `primaries` set is still empty. Dereferencing begin() on an empty
+        // std::set is undefined behavior (it equals end()), so there is genuinely nothing to copy
+        // from the most-loaded node here; end the round rather than crash the meta server. Any
+        // remaining imbalance is resolved on a subsequent balancer pass once projected moves land.
+        if (nodes[max_load].primaries.empty())
+        {
+            dwarn("greedy_copy_primary: most-loaded node %s has no primary to copy, stop this balance round",
+                max_load.to_string());
+            break;
+        }
 
         //currently we simply random copy one primary from one machine to another
         //TODO: a better policy is necessary if considering the copying cost

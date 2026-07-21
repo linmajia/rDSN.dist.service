@@ -300,7 +300,22 @@ void zookeeper_session::global_watcher(zhandle_t *handle, int type, int state, c
     if (type!=ZOO_SESSION_EVENT && path!=nullptr)
         ddebug("watcher path: %s", path);
 
-    dassert(zoo_session->_handle.load(std::memory_order_relaxed) == handle, "");
+    // The ZooKeeper C client can invoke this watcher from its IO/completion thread
+    // before attach()'s "_handle.store(zookeeper_init(...))" has finished publishing
+    // the handle on the calling thread -- the very first session event (e.g. the
+    // CONNECTED event against a co-located ZooKeeper) can fire while zookeeper_init is
+    // still returning. In that window _handle is still nullptr and therefore differs
+    // from the handle passed in here, which used to trip dassert(_handle == handle) and
+    // abort the whole meta server at startup. The handle argument is not otherwise
+    // needed (event dispatch is keyed off ctx/this), so a mismatch is a benign timing
+    // artifact: log it and dispatch the event instead of crashing.
+    zhandle_t* cached = zoo_session->_handle.load(std::memory_order_relaxed);
+    if (cached != handle)
+    {
+        dwarn("global watcher handle mismatch (cached=%p, callback=%p), type(%d), state(%d); "
+              "dispatching anyway",
+              (void*)cached, (void*)handle, type, state);
+    }
     zoo_session->dispatch_event(type, state, type==ZOO_SESSION_EVENT?"":path);
 }
 
